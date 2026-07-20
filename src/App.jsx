@@ -26,7 +26,7 @@ const App = () => {
       <div className="flex-1 overflow-y-auto">
         <div className="p-6">
           <Routes>
-            <Route path="/" element={<Navigate to="/stats" replace />} />
+            <Route path="/" element={<Stats />} />
             <Route path="/create_employee" element={<EmployeeCreate />} />
             <Route path="/delete_employee" element={<EmployeeDelete />} />
             <Route path="/read_employee" element={<EmployeeRead />} />
@@ -39,8 +39,8 @@ const App = () => {
             <Route path="/read_stock" element={<StockRead />} />
             <Route path="/delete_stock" element={<StockDelete />} />
             <Route path="/update_stock" element={<StockUpdate />} />
-            <Route path="/stats" element={<Stats />} />
             <Route path="/session" element={<Session />} />
+            <Route path="/stats" element={<Stats />} />
           </Routes>
         </div>
       </div>
