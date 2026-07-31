@@ -1,5 +1,5 @@
 // InvoiceRead.jsx - Displays all invoices from database without session filter
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 
 const API_BASE_URL = 'https://bisni-ms-backend.onrender.com/api';
@@ -7,10 +7,16 @@ const API_BASE_URL = 'https://bisni-ms-backend.onrender.com/api';
 const InvoiceRead = () => {
   const [invoices, setInvoices] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
   const [selectedInvoice, setSelectedInvoice] = useState(null);
   const [employees, setEmployees] = useState([]);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
+  const [totalCount, setTotalCount] = useState(0);
+  const observer = useRef();
+  const ITEMS_PER_PAGE = 7; // Maximum 7 per page
   
   // Filter states
   const [filters, setFilters] = useState({
@@ -25,9 +31,23 @@ const InvoiceRead = () => {
   });
 
   useEffect(() => {
-    fetchInvoices();
     fetchEmployees();
+    fetchInvoices(true); // Reset on initial load
   }, []);
+
+  // Infinite scroll observer
+  const lastInvoiceElementRef = useCallback(node => {
+    if (loadingMore) return;
+    if (observer.current) observer.current.disconnect();
+    
+    observer.current = new IntersectionObserver(entries => {
+      if (entries[0].isIntersecting && hasMore && !loading) {
+        loadMoreInvoices();
+      }
+    }, { threshold: 0.5 });
+    
+    if (node) observer.current.observe(node);
+  }, [loadingMore, hasMore, loading]);
 
   const fetchEmployees = async () => {
     try {
@@ -38,28 +58,53 @@ const InvoiceRead = () => {
     }
   };
 
-  const fetchInvoices = async (filterParams = {}) => {
+  const fetchInvoices = async (reset = false, filterParams = filters) => {
     try {
-      setLoading(true);
+      if (reset) {
+        setLoading(true);
+        setPage(1);
+        setInvoices([]);
+        setHasMore(true);
+      } else {
+        setLoadingMore(true);
+      }
       setError(null);
       
+      const currentPage = reset ? 1 : page;
       const params = new URLSearchParams();
       
+      // Add filter parameters
       Object.keys(filterParams).forEach(key => {
         if (filterParams[key]) {
           params.append(key, filterParams[key]);
         }
       });
       
+      // Add pagination parameters
+      params.append('page', currentPage);
+      params.append('limit', ITEMS_PER_PAGE);
+      
       const queryString = params.toString();
-      const url = queryString ? `${API_BASE_URL}/invoice?${queryString}` : `${API_BASE_URL}/invoice`;
+      const url = `${API_BASE_URL}/invoice?${queryString}`;
       
       const response = await axios.get(url);
       const data = response.data.data || response.data || [];
-      setInvoices(data);
+      const count = response.data.count || response.data.totalCount || 0;
       
-      if (response.data.count !== undefined) {
-        setSuccess(`${response.data.count} invoice(s) loaded`);
+      if (reset) {
+        setInvoices(data);
+        setTotalCount(count);
+        if (data.length < ITEMS_PER_PAGE) {
+          setHasMore(false);
+        }
+        if (count !== undefined) {
+          setSuccess(`${count} invoice(s) loaded`);
+        }
+      } else {
+        setInvoices(prev => [...prev, ...data]);
+        if (data.length < ITEMS_PER_PAGE) {
+          setHasMore(false);
+        }
       }
       
     } catch (error) {
@@ -67,6 +112,14 @@ const InvoiceRead = () => {
       setError('Failed to load invoices. Please try again later.');
     } finally {
       setLoading(false);
+      setLoadingMore(false);
+    }
+  };
+
+  const loadMoreInvoices = () => {
+    if (!loadingMore && hasMore) {
+      setPage(prevPage => prevPage + 1);
+      fetchInvoices(false);
     }
   };
 
@@ -81,9 +134,9 @@ const InvoiceRead = () => {
   const applyFilters = () => {
     const hasFilters = Object.values(filters).some(v => v);
     if (hasFilters) {
-      fetchInvoices(filters);
+      fetchInvoices(true, filters);
     } else {
-      fetchInvoices();
+      fetchInvoices(true, {});
     }
   };
 
@@ -98,7 +151,7 @@ const InvoiceRead = () => {
       endDate: '',
       employeeName: ''
     });
-    fetchInvoices();
+    fetchInvoices(true, {});
   };
 
   const handleViewInvoice = (invoice) => {
@@ -127,7 +180,201 @@ const InvoiceRead = () => {
     return totalCommission;
   };
 
-  // Print function
+  // Calculate commission for an invoice
+  const calculateInvoiceCommission = (invoice) => {
+    const employee = employees.find(emp => 
+      emp.employeeName === invoice.employeeName && 
+      emp.employeeMobileNumber === invoice.employeeMobileNumber &&
+      emp.employeeAddres === invoice.employeeAddres
+    );
+    return calculateEmployeeCommission(invoice.products, employee?.employeeCommission || []);
+  };
+
+  // Generate PDF and share to WhatsApp
+  const generatePDF = async (html) => {
+    // Create a canvas from HTML (simplified PDF generation)
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      setError('Please allow popups to generate PDF');
+      return null;
+    }
+    printWindow.document.write(html);
+    printWindow.document.close();
+    return printWindow;
+  };
+
+  // Share individual invoice to WhatsApp
+  const handleShareToWhatsApp = async (invoice) => {
+    const employee = employees.find(emp => 
+      emp.employeeName === invoice.employeeName && 
+      emp.employeeMobileNumber === invoice.employeeMobileNumber &&
+      emp.employeeAddres === invoice.employeeAddres
+    );
+    const commission = calculateEmployeeCommission(invoice.products, employee?.employeeCommission || []);
+    
+    const formatCur = (amount) => (amount || 0).toFixed(2);
+    const formatDt = (dateString) => {
+      if (!dateString) return 'N/A';
+      return new Date(dateString).toLocaleString('en-US', {
+        year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+      });
+    };
+
+    // Generate simplified HTML for sharing
+    const html = `<!DOCTYPE html>
+    <html>
+    <head>
+      <title>Invoice ${invoice.invoiceId}</title>
+      <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        .header { text-align: center; border-bottom: 2px solid #25D366; padding-bottom: 10px; margin-bottom: 15px; }
+        h1 { color: #25D366; font-size: 20px; }
+        .info { display: flex; justify-content: space-between; margin-bottom: 10px; }
+        .info-box { flex: 1; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th { background: #f0f0f0; padding: 8px; text-align: left; font-size: 12px; border-bottom: 2px solid #25D366; }
+        td { padding: 8px; border-bottom: 1px solid #ddd; font-size: 12px; }
+        .totals { margin-top: 10px; }
+        .totals td { border: none; padding: 5px; }
+        .grand-total { font-weight: bold; font-size: 14px; border-top: 2px solid #25D366; }
+        .footer { text-align: center; margin-top: 20px; font-size: 11px; color: #666; }
+        @page { size: A4; margin: 10mm; }
+      </style>
+    </head>
+    <body>
+      <div class="header">
+        <h1>INVOICE</h1>
+        <p>${invoice.invoiceId}</p>
+        <p>Date: ${formatDt(invoice.createdAt)}</p>
+      </div>
+      <div class="info">
+        <div class="info-box">
+          <h3>Employee</h3>
+          <p>${invoice.employeeName}</p>
+          <p>${invoice.employeeCategory}</p>
+          <p>${invoice.employeeMobileNumber}</p>
+        </div>
+        <div class="info-box">
+          <h3>Customer</h3>
+          <p>${invoice.customerName}</p>
+          <p>${invoice.customerMobileNumber1}</p>
+          <p>${invoice.customerAddress || 'N/A'}</p>
+        </div>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Product</th>
+            <th>Qty</th>
+            <th>Price</th>
+            <th>Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${invoice.products.map(p => `
+            <tr>
+              <td>${p.productName} (${p.productCategory})</td>
+              <td>${p.productQuantity}</td>
+              <td>Rs. ${formatCur(p.productSalePrice)}</td>
+              <td>Rs. ${formatCur(p.productTotalAmount)}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+      <div class="totals">
+        <table>
+          <tr>
+            <td>Grand Total:</td>
+            <td>Rs. ${formatCur(invoice.grandTotalAmount)}</td>
+          </tr>
+          ${commission > 0 ? `
+          <tr>
+            <td>Commission:</td>
+            <td>Rs. ${formatCur(commission)}</td>
+          </tr>
+          ` : ''}
+        </table>
+      </div>
+      <div class="footer">
+        <p>Bisni Sales Management System</p>
+      </div>
+    </body>
+    </html>`;
+
+    // Open WhatsApp with a message
+    const message = `Invoice Details:\n\nInvoice ID: ${invoice.invoiceId}\nDate: ${formatDt(invoice.createdAt)}\nCustomer: ${invoice.customerName}\nAmount: Rs. ${formatCur(invoice.grandTotalAmount)}\n\nView full invoice details in the app.`;
+    
+    // Try to share as PDF using Web Share API, fallback to WhatsApp message
+    if (navigator.share) {
+      try {
+        const blob = new Blob([html], { type: 'text/html' });
+        const file = new File([blob], `Invoice-${invoice.invoiceId}.html`, { type: 'text/html' });
+        await navigator.share({
+          title: `Invoice ${invoice.invoiceId}`,
+          text: message,
+          files: [file]
+        });
+      } catch (error) {
+        // Fallback to WhatsApp Web
+        window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank');
+      }
+    } else {
+      window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank');
+    }
+  };
+
+  // Share filtered invoices list to WhatsApp
+  const handleShareFilteredList = async () => {
+    if (invoices.length === 0) {
+      setError('No invoices to share');
+      return;
+    }
+
+    const formatCur = (amount) => (amount || 0).toFixed(2);
+    const formatDt = (dateString) => {
+      if (!dateString) return 'N/A';
+      return new Date(dateString).toLocaleString('en-US', {
+        year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+      });
+    };
+
+    // Create summary message
+    let totalCommission = 0;
+    let totalAmount = 0;
+    
+    const invoiceList = invoices.map((inv, i) => {
+      const commission = calculateInvoiceCommission(inv);
+      totalCommission += commission;
+      totalAmount += (inv.grandTotalAmount || 0);
+      
+      return `${i + 1}. ${inv.invoiceId} - ${inv.customerName} - Rs. ${formatCur(inv.grandTotalAmount)}`;
+    }).join('\n');
+
+    const hasFilters = Object.values(filters).some(v => v);
+    const filterInfo = hasFilters ? 'Filtered Invoices' : 'All Invoices';
+    
+    const message = `📊 INVOICES REPORT - ${filterInfo}\n\n` +
+      `Total Invoices: ${invoices.length}\n` +
+      `Total Revenue: Rs. ${formatCur(totalAmount)}\n` +
+      `Total Commission: Rs. ${formatCur(totalCommission)}\n\n` +
+      `Invoice List:\n${invoiceList}\n\n` +
+      `Generated by Bisni Sales Management`;
+
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: `Invoices Report - ${filterInfo}`,
+          text: message
+        });
+      } catch (error) {
+        window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank');
+      }
+    } else {
+      window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank');
+    }
+  };
+
+  // Print individual invoice (keeping original functionality)
   const handlePrint = (invoiceId) => {
     const inv = invoices.find(i => i._id === invoiceId || i.invoiceId === invoiceId);
     if (!inv) {
@@ -346,6 +593,132 @@ const InvoiceRead = () => {
     printWindow.document.close();
   };
 
+  // Print filtered invoices list (keeping original functionality)
+  const handlePrintFilteredList = () => {
+    if (invoices.length === 0) {
+      setError('No invoices to print');
+      return;
+    }
+
+    const formatCur = (amount) => (amount || 0).toFixed(2);
+    const formatDt = (dateString) => {
+      if (!dateString) return 'N/A';
+      return new Date(dateString).toLocaleString('en-US', {
+        year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+      });
+    };
+
+    // Calculate total commission and total amount
+    let totalCommission = 0;
+    let totalAmount = 0;
+
+    const invoiceRows = invoices.map((inv, i) => {
+      const commission = calculateInvoiceCommission(inv);
+      totalCommission += commission;
+      totalAmount += (inv.grandTotalAmount || 0);
+      
+      return `
+        <tr>
+          <td style="text-align:center;">${i + 1}</td>
+          <td>${inv.invoiceId}</td>
+          <td>${formatDt(inv.createdAt)}</td>
+          <td>${inv.customerName || 'N/A'}</td>
+          <td style="text-align:right;">Rs. ${formatCur(commission)}</td>
+          <td style="text-align:right;">Rs. ${formatCur(inv.grandTotalAmount || 0)}</td>
+        </tr>
+      `;
+    }).join('');
+
+    const hasFilters = Object.values(filters).some(v => v);
+    const filterInfo = hasFilters ? 'Filtered Invoices' : 'All Invoices';
+
+    const html = `<!DOCTYPE html>
+    <html>
+    <head>
+      <title>Invoices Report - ${filterInfo}</title>
+      <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 25px; color: #1a1a2e; max-width: 800px; margin: 0 auto; }
+        .header { text-align: center; border-bottom: 3px solid #0891b2; padding-bottom: 15px; margin-bottom: 20px; }
+        .header h1 { color: #0891b2; margin: 0; font-size: 22px; letter-spacing: 1px; }
+        .header p { margin: 5px 0; color: #64748b; font-size: 13px; }
+        .header .dates { display: flex; justify-content: space-between; font-size: 11px; color: #94a3b8; margin-top: 8px; }
+        .section { margin-bottom: 18px; }
+        .section h3 { color: #06b6d4; border-bottom: 1px solid #e2e8f0; padding-bottom: 5px; font-size: 14px; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
+        .section p { font-size: 12px; margin-bottom: 3px; }
+        .section span { font-weight: 500; color: #334155; }
+        .info-grid { display: flex; gap: 25px; }
+        .info-box { flex: 1; }
+        table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+        th { background: #f0fdfa; padding: 9px 10px; text-align: left; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 2px solid #0891b2; color: #0f766e; }
+        td { padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 13px; }
+        .totals { width: 380px; margin-left: auto; margin-top: 8px; }
+        .totals td { border: none; padding: 5px 8px; font-size: 13px; }
+        .totals .grand-total { font-weight: 700; font-size: 15px; border-top: 2px solid #0891b2; color: #0891b2; }
+        .totals .grand-total td { padding-top: 8px; }
+        .footer { text-align: center; margin-top: 25px; font-size: 11px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 12px; }
+        @media print { body { padding: 10px; max-width: 100%; } }
+        @page { size: A4; margin: 8mm; }
+      </style>
+    </head>
+    <body>
+      <div class="header">
+        <h1>📋 INVOICES REPORT</h1>
+        <p>${filterInfo} | Total Invoices: ${invoices.length}</p>
+        <div class="dates">
+          <span>Generated: ${formatDt(new Date().toISOString())}</span>
+          <span>Total Invoices: ${invoices.length}</span>
+        </div>
+      </div>
+
+      <div class="section">
+        <h3>Invoice List</h3>
+        <table>
+          <thead>
+            <tr>
+              <th style="text-align:center;width:30px;">#</th>
+              <th>Invoice ID</th>
+              <th>Date</th>
+              <th>Customer</th>
+              <th style="text-align:right;">Commission</th>
+              <th style="text-align:right;">Total Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${invoiceRows}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="section">
+        <table class="totals">
+          <tr>
+            <td>Total Commission:</td>
+            <td style="text-align:right;font-weight:600;color:#7c3aed;">Rs. ${formatCur(totalCommission)}</td>
+          </tr>
+          <tr class="grand-total">
+            <td>Grand Total Revenue:</td>
+            <td style="text-align:right;">Rs. ${formatCur(totalAmount)}</td>
+          </tr>
+        </table>
+      </div>
+
+      <div class="footer">
+        <p>Generated by Bisni Sales Management | ${filterInfo}</p>
+      </div>
+      <script>window.onload=function(){window.print();}<\/script>
+    </body>
+    </html>`;
+
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      setError('Please allow popups to print the report');
+      return;
+    }
+    printWindow.document.write(html);
+    printWindow.document.close();
+  };
+
   const clearMessages = () => {
     setError(null);
     setSuccess(null);
@@ -474,12 +847,24 @@ const InvoiceRead = () => {
         <div className="bg-white rounded-lg shadow-md overflow-hidden">
           <div className="bg-gradient-to-r from-blue-600 to-cyan-600 px-3 sm:px-4 py-2 sm:py-2.5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
             <h2 className="text-xs sm:text-sm font-semibold text-white">
-              Invoice List ({invoices.length})
+              Invoice List ({totalCount || invoices.length})
             </h2>
-            <button onClick={() => fetchInvoices()}
-              className="px-2.5 py-1 bg-white text-blue-600 rounded-md hover:bg-gray-100 text-xs font-medium w-full sm:w-auto">
-              🔄 Refresh
-            </button>
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              <button onClick={handleShareFilteredList}
+                className="px-2.5 py-1 bg-white text-green-600 rounded-md hover:bg-gray-100 text-xs font-medium w-full sm:w-auto"
+                title="Share filtered invoices list to WhatsApp">
+                📱 Share List
+              </button>
+              <button onClick={handlePrintFilteredList}
+                className="px-2.5 py-1 bg-white text-purple-600 rounded-md hover:bg-gray-100 text-xs font-medium w-full sm:w-auto"
+                title="Print filtered invoices list">
+                🖨️ Print List
+              </button>
+              <button onClick={() => fetchInvoices(true)}
+                className="px-2.5 py-1 bg-white text-blue-600 rounded-md hover:bg-gray-100 text-xs font-medium w-full sm:w-auto">
+                🔄 Refresh
+              </button>
+            </div>
           </div>
 
           {loading ? (
@@ -502,49 +887,60 @@ const InvoiceRead = () => {
             <div className="overflow-x-auto">
               {/* Mobile Card View */}
               <div className="block lg:hidden">
-                {invoices.map((invoice) => (
-                  <div key={invoice._id} className="border-b border-gray-200 p-3 hover:bg-gray-50 transition duration-150">
-                    <div className="flex justify-between items-start mb-2">
-                      <div className="flex-1 min-w-0">
-                        <div className="text-xs font-medium text-gray-900 truncate">{invoice.invoiceId}</div>
-                        <div className="text-xs text-gray-500">{formatDate(invoice.createdAt)}</div>
-                      </div>
-                      <div className="text-right flex-shrink-0 ml-2">
-                        <div className="text-xs font-bold text-green-600">Rs. {formatCurrency(invoice.grandTotalAmount)}</div>
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2 mb-2 text-xs">
-                      <div>
-                        <span className="text-gray-500">Customer: </span>
-                        <span className="font-medium">{invoice.customerName}</span>
-                      </div>
-                      <div>
-                        <span className="text-gray-500">Employee: </span>
-                        <span className="font-medium">{invoice.employeeName}</span>
-                      </div>
-                      {invoice.customerMobileNumber1 && (
-                        <div>
-                          <span className="text-gray-500">Mobile: </span>
-                          <span className="font-medium">{invoice.customerMobileNumber1}</span>
+                {invoices.map((invoice, index) => {
+                  const isLastElement = index === invoices.length - 1;
+                  return (
+                    <div 
+                      key={invoice._id} 
+                      ref={isLastElement ? lastInvoiceElementRef : null}
+                      className="border-b border-gray-200 p-3 hover:bg-gray-50 transition duration-150"
+                    >
+                      <div className="flex justify-between items-start mb-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="text-xs font-medium text-gray-900 truncate">{invoice.invoiceId}</div>
+                          <div className="text-xs text-gray-500">{formatDate(invoice.createdAt)}</div>
                         </div>
-                      )}
-                      <div>
-                        <span className="text-gray-500">Items: </span>
-                        <span className="font-medium">{calculateTotalItems(invoice.products)}</span>
+                        <div className="text-right flex-shrink-0 ml-2">
+                          <div className="text-xs font-bold text-green-600">Rs. {formatCurrency(invoice.grandTotalAmount)}</div>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 mb-2 text-xs">
+                        <div>
+                          <span className="text-gray-500">Customer: </span>
+                          <span className="font-medium">{invoice.customerName}</span>
+                        </div>
+                        <div>
+                          <span className="text-gray-500">Employee: </span>
+                          <span className="font-medium">{invoice.employeeName}</span>
+                        </div>
+                        {invoice.customerMobileNumber1 && (
+                          <div>
+                            <span className="text-gray-500">Mobile: </span>
+                            <span className="font-medium">{invoice.customerMobileNumber1}</span>
+                          </div>
+                        )}
+                        <div>
+                          <span className="text-gray-500">Items: </span>
+                          <span className="font-medium">{calculateTotalItems(invoice.products)}</span>
+                        </div>
+                      </div>
+                      <div className="flex gap-1.5">
+                        <button onClick={() => handleShareToWhatsApp(invoice)}
+                          className="flex-1 px-2 py-1 bg-green-50 text-green-600 rounded hover:bg-green-100 text-xs font-medium text-center">
+                          📱 Share
+                        </button>
+                        <button onClick={() => handleViewInvoice(invoice)}
+                          className="flex-1 px-2 py-1 bg-blue-50 text-blue-600 rounded hover:bg-blue-100 text-xs font-medium text-center">
+                          View Details
+                        </button>
+                        <button onClick={() => handlePrint(invoice._id)}
+                          className="px-2 py-1 bg-green-50 text-green-600 rounded hover:bg-green-100 text-xs font-medium">
+                          🖨️ Print
+                        </button>
                       </div>
                     </div>
-                    <div className="flex gap-1.5">
-                      <button onClick={() => handleViewInvoice(invoice)}
-                        className="flex-1 px-2 py-1 bg-blue-50 text-blue-600 rounded hover:bg-blue-100 text-xs font-medium text-center">
-                        View Details
-                      </button>
-                      <button onClick={() => handlePrint(invoice._id)}
-                        className="px-2 py-1 bg-green-50 text-green-600 rounded hover:bg-green-100 text-xs font-medium">
-                        🖨️ Print
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
 
               {/* Desktop Table View */}
@@ -557,49 +953,75 @@ const InvoiceRead = () => {
                     <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase hidden lg:table-cell">Employee</th>
                     <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase hidden xl:table-cell">Items</th>
                     <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Grand Total</th>
-                    <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase w-20">Actions</th>
+                    <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase w-28">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {invoices.map((invoice) => (
-                    <tr key={invoice._id} className="hover:bg-gray-50 transition duration-150">
-                      <td className="px-3 py-2 whitespace-nowrap">
-                        <div className="text-xs font-medium text-gray-900">{invoice.invoiceId}</div>
-                        <div className="text-xs text-gray-500 md:hidden">{formatDate(invoice.createdAt)}</div>
-                      </td>
-                      <td className="px-3 py-2 whitespace-nowrap text-xs text-gray-500">{formatDate(invoice.createdAt)}</td>
-                      <td className="px-3 py-2 whitespace-nowrap hidden md:table-cell">
-                        <div className="text-xs font-medium text-gray-900">{invoice.customerName}</div>
-                        <div className="text-xs text-gray-500">{invoice.customerMobileNumber1}</div>
-                      </td>
-                      <td className="px-3 py-2 whitespace-nowrap hidden lg:table-cell">
-                        <div className="text-xs text-gray-900">{invoice.employeeName}</div>
-                        <div className="text-xs text-gray-500">{invoice.employeeCategory}</div>
-                      </td>
-                      <td className="px-3 py-2 whitespace-nowrap text-center hidden xl:table-cell">
-                        <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                          {calculateTotalItems(invoice.products)} items
-                        </span>
-                      </td>
-                      <td className="px-3 py-2 whitespace-nowrap text-right text-xs font-bold text-green-600">
-                        Rs. {formatCurrency(invoice.grandTotalAmount)}
-                      </td>
-                      <td className="px-3 py-2 whitespace-nowrap text-center">
-                        <div className="flex items-center justify-center gap-1">
-                          <button onClick={() => handleViewInvoice(invoice)}
-                            className="inline-flex items-center px-2 py-1 bg-blue-50 text-blue-600 rounded hover:bg-blue-100 text-xs font-medium">
-                            View
-                          </button>
-                          <button onClick={() => handlePrint(invoice._id)}
-                            className="inline-flex items-center px-2 py-1 bg-green-50 text-green-600 rounded hover:bg-green-100 text-xs font-medium">
-                            🖨️
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                  {invoices.map((invoice, index) => {
+                    const isLastElement = index === invoices.length - 1;
+                    return (
+                      <tr 
+                        key={invoice._id} 
+                        ref={isLastElement ? lastInvoiceElementRef : null}
+                        className="hover:bg-gray-50 transition duration-150"
+                      >
+                        <td className="px-3 py-2 whitespace-nowrap">
+                          <div className="text-xs font-medium text-gray-900">{invoice.invoiceId}</div>
+                          <div className="text-xs text-gray-500 md:hidden">{formatDate(invoice.createdAt)}</div>
+                        </td>
+                        <td className="px-3 py-2 whitespace-nowrap text-xs text-gray-500">{formatDate(invoice.createdAt)}</td>
+                        <td className="px-3 py-2 whitespace-nowrap hidden md:table-cell">
+                          <div className="text-xs font-medium text-gray-900">{invoice.customerName}</div>
+                          <div className="text-xs text-gray-500">{invoice.customerMobileNumber1}</div>
+                        </td>
+                        <td className="px-3 py-2 whitespace-nowrap hidden lg:table-cell">
+                          <div className="text-xs text-gray-900">{invoice.employeeName}</div>
+                          <div className="text-xs text-gray-500">{invoice.employeeCategory}</div>
+                        </td>
+                        <td className="px-3 py-2 whitespace-nowrap text-center hidden xl:table-cell">
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                            {calculateTotalItems(invoice.products)} items
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 whitespace-nowrap text-right text-xs font-bold text-green-600">
+                          Rs. {formatCurrency(invoice.grandTotalAmount)}
+                        </td>
+                        <td className="px-3 py-2 whitespace-nowrap text-center">
+                          <div className="flex items-center justify-center gap-1">
+                            <button onClick={() => handleShareToWhatsApp(invoice)}
+                              className="inline-flex items-center px-2 py-1 bg-green-50 text-green-600 rounded hover:bg-green-100 text-xs font-medium">
+                              📱 Share
+                            </button>
+                            <button onClick={() => handleViewInvoice(invoice)}
+                              className="inline-flex items-center px-2 py-1 bg-blue-50 text-blue-600 rounded hover:bg-blue-100 text-xs font-medium">
+                              View
+                            </button>
+                            <button onClick={() => handlePrint(invoice._id)}
+                              className="inline-flex items-center px-2 py-1 bg-green-50 text-green-600 rounded hover:bg-green-100 text-xs font-medium">
+                              🖨️
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
+              
+              {/* Loading More Indicator */}
+              {loadingMore && (
+                <div className="flex justify-center items-center py-4">
+                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
+                  <span className="ml-2 text-xs text-gray-600">Loading more invoices...</span>
+                </div>
+              )}
+              
+              {/* End of List Indicator */}
+              {!hasMore && invoices.length > 0 && (
+                <div className="text-center py-4 text-xs text-gray-500">
+                  All invoices loaded ({invoices.length} total)
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -611,6 +1033,10 @@ const InvoiceRead = () => {
               <div className="bg-gradient-to-r from-blue-600 to-cyan-600 px-3 sm:px-4 py-2 sm:py-2.5 flex justify-between items-center sticky top-0 z-10">
                 <h3 className="text-xs sm:text-sm font-semibold text-white truncate mr-2">Invoice Details</h3>
                 <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
+                  <button onClick={() => handleShareToWhatsApp(selectedInvoice)}
+                    className="px-2 sm:px-2.5 py-1 bg-white text-green-600 rounded-md hover:bg-gray-100 text-xs font-medium whitespace-nowrap">
+                    📱 Share
+                  </button>
                   <button onClick={() => handlePrint(selectedInvoice._id)}
                     className="px-2 sm:px-2.5 py-1 bg-white text-green-600 rounded-md hover:bg-gray-100 text-xs font-medium whitespace-nowrap">
                     🖨️ Print
