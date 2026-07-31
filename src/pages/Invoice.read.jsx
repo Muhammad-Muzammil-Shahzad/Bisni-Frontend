@@ -190,189 +190,8 @@ const InvoiceRead = () => {
     return calculateEmployeeCommission(invoice.products, employee?.employeeCommission || []);
   };
 
-  // Generate PDF and share to WhatsApp
-  const generatePDF = async (html) => {
-    // Create a canvas from HTML (simplified PDF generation)
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) {
-      setError('Please allow popups to generate PDF');
-      return null;
-    }
-    printWindow.document.write(html);
-    printWindow.document.close();
-    return printWindow;
-  };
 
-  // Share individual invoice to WhatsApp
-  const handleShareToWhatsApp = async (invoice) => {
-    const employee = employees.find(emp => 
-      emp.employeeName === invoice.employeeName && 
-      emp.employeeMobileNumber === invoice.employeeMobileNumber &&
-      emp.employeeAddres === invoice.employeeAddres
-    );
-    const commission = calculateEmployeeCommission(invoice.products, employee?.employeeCommission || []);
-    
-    const formatCur = (amount) => (amount || 0).toFixed(2);
-    const formatDt = (dateString) => {
-      if (!dateString) return 'N/A';
-      return new Date(dateString).toLocaleString('en-US', {
-        year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
-      });
-    };
 
-    // Generate simplified HTML for sharing
-    const html = `<!DOCTYPE html>
-    <html>
-    <head>
-      <title>Invoice ${invoice.invoiceId}</title>
-      <style>
-        body { font-family: Arial, sans-serif; padding: 20px; }
-        .header { text-align: center; border-bottom: 2px solid #25D366; padding-bottom: 10px; margin-bottom: 15px; }
-        h1 { color: #25D366; font-size: 20px; }
-        .info { display: flex; justify-content: space-between; margin-bottom: 10px; }
-        .info-box { flex: 1; }
-        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-        th { background: #f0f0f0; padding: 8px; text-align: left; font-size: 12px; border-bottom: 2px solid #25D366; }
-        td { padding: 8px; border-bottom: 1px solid #ddd; font-size: 12px; }
-        .totals { margin-top: 10px; }
-        .totals td { border: none; padding: 5px; }
-        .grand-total { font-weight: bold; font-size: 14px; border-top: 2px solid #25D366; }
-        .footer { text-align: center; margin-top: 20px; font-size: 11px; color: #666; }
-        @page { size: A4; margin: 10mm; }
-      </style>
-    </head>
-    <body>
-      <div class="header">
-        <h1>INVOICE</h1>
-        <p>${invoice.invoiceId}</p>
-        <p>Date: ${formatDt(invoice.createdAt)}</p>
-      </div>
-      <div class="info">
-        <div class="info-box">
-          <h3>Employee</h3>
-          <p>${invoice.employeeName}</p>
-          <p>${invoice.employeeCategory}</p>
-          <p>${invoice.employeeMobileNumber}</p>
-        </div>
-        <div class="info-box">
-          <h3>Customer</h3>
-          <p>${invoice.customerName}</p>
-          <p>${invoice.customerMobileNumber1}</p>
-          <p>${invoice.customerAddress || 'N/A'}</p>
-        </div>
-      </div>
-      <table>
-        <thead>
-          <tr>
-            <th>Product</th>
-            <th>Qty</th>
-            <th>Price</th>
-            <th>Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${invoice.products.map(p => `
-            <tr>
-              <td>${p.productName} (${p.productCategory})</td>
-              <td>${p.productQuantity}</td>
-              <td>Rs. ${formatCur(p.productSalePrice)}</td>
-              <td>Rs. ${formatCur(p.productTotalAmount)}</td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
-      <div class="totals">
-        <table>
-          <tr>
-            <td>Grand Total:</td>
-            <td>Rs. ${formatCur(invoice.grandTotalAmount)}</td>
-          </tr>
-          ${commission > 0 ? `
-          <tr>
-            <td>Commission:</td>
-            <td>Rs. ${formatCur(commission)}</td>
-          </tr>
-          ` : ''}
-        </table>
-      </div>
-      <div class="footer">
-        <p>Bisni Sales Management System</p>
-      </div>
-    </body>
-    </html>`;
-
-    // Open WhatsApp with a message
-    const message = `Invoice Details:\n\nInvoice ID: ${invoice.invoiceId}\nDate: ${formatDt(invoice.createdAt)}\nCustomer: ${invoice.customerName}\nAmount: Rs. ${formatCur(invoice.grandTotalAmount)}\n\nView full invoice details in the app.`;
-    
-    // Try to share as PDF using Web Share API, fallback to WhatsApp message
-    if (navigator.share) {
-      try {
-        const blob = new Blob([html], { type: 'text/html' });
-        const file = new File([blob], `Invoice-${invoice.invoiceId}.html`, { type: 'text/html' });
-        await navigator.share({
-          title: `Invoice ${invoice.invoiceId}`,
-          text: message,
-          files: [file]
-        });
-      } catch (error) {
-        // Fallback to WhatsApp Web
-        window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank');
-      }
-    } else {
-      window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank');
-    }
-  };
-
-  // Share filtered invoices list to WhatsApp
-  const handleShareFilteredList = async () => {
-    if (invoices.length === 0) {
-      setError('No invoices to share');
-      return;
-    }
-
-    const formatCur = (amount) => (amount || 0).toFixed(2);
-    const formatDt = (dateString) => {
-      if (!dateString) return 'N/A';
-      return new Date(dateString).toLocaleString('en-US', {
-        year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
-      });
-    };
-
-    // Create summary message
-    let totalCommission = 0;
-    let totalAmount = 0;
-    
-    const invoiceList = invoices.map((inv, i) => {
-      const commission = calculateInvoiceCommission(inv);
-      totalCommission += commission;
-      totalAmount += (inv.grandTotalAmount || 0);
-      
-      return `${i + 1}. ${inv.invoiceId} - ${inv.customerName} - Rs. ${formatCur(inv.grandTotalAmount)}`;
-    }).join('\n');
-
-    const hasFilters = Object.values(filters).some(v => v);
-    const filterInfo = hasFilters ? 'Filtered Invoices' : 'All Invoices';
-    
-    const message = `📊 INVOICES REPORT - ${filterInfo}\n\n` +
-      `Total Invoices: ${invoices.length}\n` +
-      `Total Revenue: Rs. ${formatCur(totalAmount)}\n` +
-      `Total Commission: Rs. ${formatCur(totalCommission)}\n\n` +
-      `Invoice List:\n${invoiceList}\n\n` +
-      `Generated by Bisni Sales Management`;
-
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: `Invoices Report - ${filterInfo}`,
-          text: message
-        });
-      } catch (error) {
-        window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank');
-      }
-    } else {
-      window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank');
-    }
-  };
 
   // Print individual invoice (keeping original functionality)
   const handlePrint = (invoiceId) => {
@@ -850,11 +669,6 @@ const InvoiceRead = () => {
               Invoice List ({totalCount || invoices.length})
             </h2>
             <div className="flex items-center gap-2 w-full sm:w-auto">
-              <button onClick={handleShareFilteredList}
-                className="px-2.5 py-1 bg-white text-green-600 rounded-md hover:bg-gray-100 text-xs font-medium w-full sm:w-auto"
-                title="Share filtered invoices list to WhatsApp">
-                📱 Share List
-              </button>
               <button onClick={handlePrintFilteredList}
                 className="px-2.5 py-1 bg-white text-purple-600 rounded-md hover:bg-gray-100 text-xs font-medium w-full sm:w-auto"
                 title="Print filtered invoices list">
@@ -925,10 +739,6 @@ const InvoiceRead = () => {
                         </div>
                       </div>
                       <div className="flex gap-1.5">
-                        <button onClick={() => handleShareToWhatsApp(invoice)}
-                          className="flex-1 px-2 py-1 bg-green-50 text-green-600 rounded hover:bg-green-100 text-xs font-medium text-center">
-                          📱 Share
-                        </button>
                         <button onClick={() => handleViewInvoice(invoice)}
                           className="flex-1 px-2 py-1 bg-blue-50 text-blue-600 rounded hover:bg-blue-100 text-xs font-medium text-center">
                           View Details
@@ -988,10 +798,6 @@ const InvoiceRead = () => {
                         </td>
                         <td className="px-3 py-2 whitespace-nowrap text-center">
                           <div className="flex items-center justify-center gap-1">
-                            <button onClick={() => handleShareToWhatsApp(invoice)}
-                              className="inline-flex items-center px-2 py-1 bg-green-50 text-green-600 rounded hover:bg-green-100 text-xs font-medium">
-                              📱 Share
-                            </button>
                             <button onClick={() => handleViewInvoice(invoice)}
                               className="inline-flex items-center px-2 py-1 bg-blue-50 text-blue-600 rounded hover:bg-blue-100 text-xs font-medium">
                               View
@@ -1033,10 +839,6 @@ const InvoiceRead = () => {
               <div className="bg-gradient-to-r from-blue-600 to-cyan-600 px-3 sm:px-4 py-2 sm:py-2.5 flex justify-between items-center sticky top-0 z-10">
                 <h3 className="text-xs sm:text-sm font-semibold text-white truncate mr-2">Invoice Details</h3>
                 <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
-                  <button onClick={() => handleShareToWhatsApp(selectedInvoice)}
-                    className="px-2 sm:px-2.5 py-1 bg-white text-green-600 rounded-md hover:bg-gray-100 text-xs font-medium whitespace-nowrap">
-                    📱 Share
-                  </button>
                   <button onClick={() => handlePrint(selectedInvoice._id)}
                     className="px-2 sm:px-2.5 py-1 bg-white text-green-600 rounded-md hover:bg-gray-100 text-xs font-medium whitespace-nowrap">
                     🖨️ Print
