@@ -13,20 +13,20 @@ import StockCreate from './pages/Stock.create';
 import StockRead from './pages/Stock.read';
 import StockDelete from './pages/Stock.delete';
 import StockUpdate from './pages/Stock.update';
+import StockHistory from './pages/Stock.history';  // NEW IMPORT
 import Session from './pages/Session';
 import Stats from './pages/Stats';
+import SalesHistory from './pages/Sales.History'
 
 const App = () => {
   return (
     <div className="flex h-screen bg-gray-100">
-      {/* Navigation Sidebar */}
       <Navigation />
       
-      {/* Main Content Area */}
       <div className="flex-1 overflow-y-auto">
         <div className="p-6">
           <Routes>
-            <Route path="/" element={<Stats />} />
+            <Route path="/" element={<Navigate to="/stats" replace />} />
             <Route path="/create_employee" element={<EmployeeCreate />} />
             <Route path="/delete_employee" element={<EmployeeDelete />} />
             <Route path="/read_employee" element={<EmployeeRead />} />
@@ -39,8 +39,10 @@ const App = () => {
             <Route path="/read_stock" element={<StockRead />} />
             <Route path="/delete_stock" element={<StockDelete />} />
             <Route path="/update_stock" element={<StockUpdate />} />
-            <Route path="/session" element={<Session />} />
+            <Route path="/stock_history" element={<StockHistory />} />  {/* NEW ROUTE */}
             <Route path="/stats" element={<Stats />} />
+            <Route path="/session" element={<Session />} />
+            <Route path="/sales_history" element={<SalesHistory />} />
           </Routes>
         </div>
       </div>
