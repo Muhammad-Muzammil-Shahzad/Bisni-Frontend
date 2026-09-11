@@ -1,5 +1,5 @@
-// InvoiceRead.jsx - Displays all invoices from database without session filter
-import React, { useState, useEffect } from 'react';
+// InvoiceRead.jsx - Displays all invoices with bulk selection for printing
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import axios from 'axios';
 
 const API_BASE_URL = 'https://bisni-ms-backend.onrender.com/api';
@@ -12,6 +12,10 @@ const InvoiceRead = () => {
   const [selectedInvoice, setSelectedInvoice] = useState(null);
   const [employees, setEmployees] = useState([]);
   
+  // Bulk selection states
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [selectAll, setSelectAll] = useState(false);
+
   // Filter states
   const [filters, setFilters] = useState({
     employeeCategory: '',
@@ -58,6 +62,10 @@ const InvoiceRead = () => {
       const data = response.data.data || response.data || [];
       setInvoices(data);
       
+      // Clear selection on new fetch
+      setSelectedIds(new Set());
+      setSelectAll(false);
+      
       if (response.data.count !== undefined) {
         setSuccess(`${response.data.count} invoice(s) loaded`);
       }
@@ -101,6 +109,78 @@ const InvoiceRead = () => {
     fetchInvoices();
   };
 
+  // ===== SELECTION HANDLERS =====
+  const toggleSelect = useCallback((id) => {
+    setSelectedIds(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(id)) {
+        newSet.delete(id);
+      } else {
+        newSet.add(id);
+      }
+      return newSet;
+    });
+  }, []);
+
+  const handleSelectAll = useCallback(() => {
+    if (selectAll) {
+      setSelectedIds(new Set());
+      setSelectAll(false);
+    } else {
+      const allIds = invoices.map(inv => inv._id);
+      setSelectedIds(new Set(allIds));
+      setSelectAll(true);
+    }
+  }, [selectAll, invoices]);
+
+  // Sync selectAll state with selectedIds
+  useEffect(() => {
+    if (invoices.length === 0) {
+      setSelectAll(false);
+      return;
+    }
+    const allSelected = invoices.every(inv => selectedIds.has(inv._id));
+    setSelectAll(allSelected);
+  }, [selectedIds, invoices]);
+
+  const clearSelection = useCallback(() => {
+    setSelectedIds(new Set());
+    setSelectAll(false);
+  }, []);
+
+  // Get selected invoice objects
+  const selectedInvoices = useMemo(() => {
+    return invoices.filter(inv => selectedIds.has(inv._id));
+  }, [invoices, selectedIds]);
+
+  // Quick select: by employee
+  const selectByEmployee = useCallback((employeeName) => {
+    const ids = invoices
+      .filter(inv => inv.employeeName === employeeName)
+      .map(inv => inv._id);
+    setSelectedIds(prev => {
+      const newSet = new Set(prev);
+      ids.forEach(id => newSet.add(id));
+      return newSet;
+    });
+  }, [invoices]);
+
+  // Quick select: by date
+  const selectByDate = useCallback((dateStr) => {
+    const ids = invoices
+      .filter(inv => {
+        if (!inv.createdAt) return false;
+        const invDate = new Date(inv.createdAt).toISOString().split('T')[0];
+        return invDate === dateStr;
+      })
+      .map(inv => inv._id);
+    setSelectedIds(prev => {
+      const newSet = new Set(prev);
+      ids.forEach(id => newSet.add(id));
+      return newSet;
+    });
+  }, [invoices]);
+
   const handleViewInvoice = (invoice) => {
     const employee = employees.find(emp => 
       emp.employeeName === invoice.employeeName && 
@@ -137,14 +217,8 @@ const InvoiceRead = () => {
     return calculateEmployeeCommission(invoice.products, employee?.employeeCommission || []);
   };
 
-  // Print individual invoice
-  const handlePrint = (invoiceId) => {
-    const inv = invoices.find(i => i._id === invoiceId || i.invoiceId === invoiceId);
-    if (!inv) {
-      setError('Invoice not found');
-      return;
-    }
-
+  // ===== SHARED: Build single invoice HTML (used for single & bulk print) =====
+  const buildInvoiceHTML = (inv) => {
     const employee = employees.find(emp => 
       emp.employeeName === inv.employeeName && 
       emp.employeeMobileNumber === inv.employeeMobileNumber &&
@@ -178,171 +252,141 @@ const InvoiceRead = () => {
         <td colspan="3" style="text-align:right;font-weight:600;color:#15803d;">Rs. ${formatCur(commission)}</td>
       </tr>` : '';
 
+    return `
+      <div class="invoice-page">
+        <div class="header">
+          <h1>📦 INVOICE</h1>
+          <p>Invoice ID: ${inv.invoiceId}</p>
+          <div class="dates">
+            <span>Created: ${formatDt(inv.createdAt)}</span>
+            <span>Printed: ${formatDt(new Date().toISOString())}</span>
+          </div>
+        </div>
+
+        <div class="section">
+          <h3>Order Details</h3>
+          <div class="info-grid">
+            <div class="info-box">
+              <p><span>Employee:</span> ${inv.employeeName}</p>
+              <p><span>Category:</span> ${inv.employeeCategory}</p>
+              <p><span>Mobile:</span> ${inv.employeeMobileNumber}</p>
+            </div>
+            <div class="info-box">
+              <p><span>Customer:</span> ${inv.customerName}</p>
+              <p><span>Contact:</span> ${inv.customerMobileNumber1}</p>
+              <p><span>Address:</span> ${inv.customerAddress || 'N/A'}</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="section">
+          <h3>Products</h3>
+          <table>
+            <thead>
+              <tr>
+                <th style="text-align:center;width:30px;">#</th>
+                <th>Product & Category</th>
+                <th style="text-align:center;width:40px;">Qty</th>
+                <th style="text-align:right;width:80px;">Price</th>
+                <th style="text-align:right;width:80px;">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${productRows}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="section">
+          <table class="totals">
+            <tr><td>Subtotal:</td><td style="text-align:right;">Rs. ${formatCur(subtotal)}</td></tr>
+            ${inv.deliveryCharges > 0 ? `<tr><td>Delivery Charges:</td><td style="text-align:right;">Rs. ${formatCur(inv.deliveryCharges)}</td></tr>` : ''}
+            <tr class="grand-total"><td>Grand Total:</td><td style="text-align:right;">Rs. ${formatCur(inv.grandTotalAmount)}</td></tr>
+            ${commissionRow}
+          </table>
+        </div>
+
+        <table style="width:100%;border-collapse:collapse;font-size:18px;font-family:Arial, sans-serif;margin-top:10px;">
+          <tr>
+            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px; font-family: sans-serif;">To</td>
+            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px; font-family: sans-serif;">${inv.customerName || 'N/A'}</td>
+          </tr>
+          <tr>
+            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px; font-family: sans-serif;">Contact</td>
+            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px; font-family: sans-serif;">${inv.customerMobileNumber1 || 'N/A'} &nbsp;&nbsp;||&nbsp;&nbsp; ${inv.customerMobileNumber2 || 'N/A'}</td>
+          </tr>
+          <tr>
+            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px; font-family: sans-serif;">Address</td>
+            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px; font-family: sans-serif;">${inv.customerAddress || 'N/A'}</td>
+          </tr>
+        </table>
+
+        <table style="width:100%;border-collapse:collapse;font-size:18px;font-family:Arial, sans-serif;margin-top:10px;">
+          <tr>
+            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px; font-family: sans-serif;">From</td>
+            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px; font-family: sans-serif;">${inv.employeeName || 'N/A'}</td>
+          </tr>
+          <tr>
+            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px; font-family: sans-serif;">Contact</td>
+            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px; font-family: sans-serif;">${inv.employeeMobileNumber || 'N/A'}</td>
+          </tr>
+          <tr>
+            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px; font-family: sans-serif;">Address</td>
+            <td style="border:2px solid #000; padding:4px 6px; font-weight:bold; font-size: 22px; font-family: sans-serif;">${inv.employeeAddress || 'N/A'}</td>
+          </tr>
+        </table>
+
+        <div class="footer">
+          <p>Generated by Bisni Sales Management | Thank you for Your Order!</p>
+        </div>
+      </div>
+    `;
+  };
+
+  // Shared CSS for print pages
+  const printCSS = `
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 25px; color: #1a1a2e; max-width: 800px; margin: 0 auto; }
+    .header { text-align: center; border-bottom: 3px solid #0891b2; padding-bottom: 15px; margin-bottom: 20px; }
+    .header h1 { color: #0891b2; margin: 0; font-size: 24px; letter-spacing: 1px; }
+    .header p { margin: 5px 0; color: #64748b; font-size: 13px; }
+    .header .dates { display: flex; justify-content: space-between; font-size: 11px; color: #94a3b8; margin-top: 8px; }
+    .section { margin-bottom: 18px; }
+    .section h3 { color: #06b6d4; border-bottom: 1px solid #e2e8f0; padding-bottom: 5px; font-size: 14px; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .section p { font-size: 12px; margin-bottom: 3px; }
+    .section span { font-weight: 500; color: #334155; }
+    .info-grid { display: flex; gap: 25px; }
+    .info-box { flex: 1; }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+    th { background: #f0fdfa; padding: 9px 10px; text-align: left; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 2px solid #0891b2; color: #0f766e; }
+    td { padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 13px; }
+    .totals { width: 380px; margin-left: auto; margin-top: 8px; }
+    .totals td { border: none; padding: 5px 8px; font-size: 13px; }
+    .totals .grand-total { font-weight: 700; font-size: 15px; border-top: 2px solid #0891b2; color: #0891b2; }
+    .totals .grand-total td { padding-top: 8px; }
+    .footer { text-align: center; margin-top: 25px; font-size: 11px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 12px; }
+    .invoice-page { page-break-after: always; }
+    .invoice-page:last-child { page-break-after: auto; }
+    @media print { body { padding: 10px; max-width: 100%; } }
+    @page { size: A4; margin: 8mm; }
+  `;
+
+  // Print individual invoice
+  const handlePrint = (invoiceId) => {
+    const inv = invoices.find(i => i._id === invoiceId || i.invoiceId === invoiceId);
+    if (!inv) {
+      setError('Invoice not found');
+      return;
+    }
+
     const html = `<!DOCTYPE html>
     <html>
     <head>
       <title>Invoice ${inv.invoiceId}</title>
-      <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 25px; color: #1a1a2e; max-width: 800px; margin: 0 auto; }
-        .header { text-align: center; border-bottom: 3px solid #0891b2; padding-bottom: 15px; margin-bottom: 20px; }
-        .header h1 { color: #0891b2; margin: 0; font-size: 24px; letter-spacing: 1px; }
-        .header p { margin: 5px 0; color: #64748b; font-size: 13px; }
-        .header .dates { display: flex; justify-content: space-between; font-size: 11px; color: #94a3b8; margin-top: 8px; }
-        .section { margin-bottom: 18px; }
-        .section h3 { color: #06b6d4; border-bottom: 1px solid #e2e8f0; padding-bottom: 5px; font-size: 14px; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
-        .section p { font-size: 12px; margin-bottom: 3px; }
-        .section span { font-weight: 500; color: #334155; }
-        .info-grid { display: flex; gap: 25px; }
-        .info-box { flex: 1; }
-        table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-        th { background: #f0fdfa; padding: 9px 10px; text-align: left; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 2px solid #0891b2; color: #0f766e; }
-        td { padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 13px; }
-        .totals { width: 380px; margin-left: auto; margin-top: 8px; }
-        .totals td { border: none; padding: 5px 8px; font-size: 13px; }
-        .totals .grand-total { font-weight: 700; font-size: 15px; border-top: 2px solid #0891b2; color: #0891b2; }
-        .totals .grand-total td { padding-top: 8px; }
-        .footer { text-align: center; margin-top: 25px; font-size: 11px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 12px; }
-        @media print { body { padding: 10px; max-width: 100%; } }
-        @page { size: A4; margin: 8mm; }
-      </style>
+      <style>${printCSS}</style>
     </head>
     <body>
-      <div class="header">
-        <h1>📦 INVOICE</h1>
-        <p>Invoice ID: ${inv.invoiceId}</p>
-        <div class="dates">
-          <span>Created: ${formatDt(inv.createdAt)}</span>
-          <span>Printed: ${formatDt(new Date().toISOString())}</span>
-        </div>
-      </div>
-
-      <div class="section">
-        <h3>Order Details</h3>
-        <div class="info-grid">
-          <div class="info-box">
-            <p><span>Employee:</span> ${inv.employeeName}</p>
-            <p><span>Category:</span> ${inv.employeeCategory}</p>
-            <p><span>Mobile:</span> ${inv.employeeMobileNumber}</p>
-          </div>
-          <div class="info-box">
-            <p><span>Customer:</span> ${inv.customerName}</p>
-            <p><span>Contact:</span> ${inv.customerMobileNumber1}</p>
-            <p><span>Address:</span> ${inv.customerAddress || 'N/A'}</p>
-          </div>
-        </div>
-      </div>
-
-      <div class="section">
-        <h3>Products</h3>
-        <table>
-          <thead>
-            <tr>
-              <th style="text-align:center;width:30px;">#</th>
-              <th>Product & Category</th>
-              <th style="text-align:center;width:40px;">Qty</th>
-              <th style="text-align:right;width:80px;">Price</th>
-              <th style="text-align:right;width:80px;">Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${productRows}
-          </tbody>
-        </table>
-      </div>
-
-      <div class="section">
-        <table class="totals">
-          <tr><td>Subtotal:</td><td style="text-align:right;">Rs. ${formatCur(subtotal)}</td></tr>
-          ${inv.deliveryCharges > 0 ? `<tr><td>Delivery Charges:</td><td style="text-align:right;">Rs. ${formatCur(inv.deliveryCharges)}</td></tr>` : ''}
-          <tr class="grand-total"><td>Grand Total:</td><td style="text-align:right;">Rs. ${formatCur(inv.grandTotalAmount)}</td></tr>
-          ${commissionRow}
-        </table>
-      </div>
-
-      <table style="
-    width:100%;
-    border-collapse:collapse;
-    font-size:18px;
-    font-family:Arial, sans-serif;
-    margin-top:10px;
-">
-    </tr>
-    <tr>
-        <td style="border:2px solid #000; padding-top:2px; padding-bottom:2px; padding-left:3px; padding-right:3px; font-weight:bold; font-size: 22px; font-family: sans-serif;" >
-            To
-        </td>
-        <td style="border:2px solid #000; padding-top:2px; padding-bottom:2px; padding-left:3px; padding-right:3px; font-weight:bold; font-size: 22px; font-family: sans-serif;" >
-            ${inv.customerName || 'N/A'}
-        </td>
-
-    </tr>
-
-    <tr>
-        <td style="border:2px solid #000; padding-top:2px; padding-bottom:2px; padding-left:3px; padding-right:3px; font-weight:bold; font-size: 22px; font-family: sans-serif;">
-            Contact
-        </td>
-        <td style="border:2px solid #000; padding-top:2px; padding-bottom:2px; padding-left:3px; padding-right:3px; font-weight:bold; font-size: 22px; font-family: sans-serif;">
-            ${inv.customerMobileNumber1 || 'N/A'} &nbsp;&nbsp;&nbsp; || &nbsp;&nbsp;&nbsp; ${inv.customerMobileNumber2 || 'N/A'}
-        </td>
-
-    </tr>
-
-    <tr>
-        <td style="border:2px solid #000; padding-top:2px; padding-bottom:2px; padding-left:3px; padding-right:3px; font-weight:bold; font-size: 22px; font-family: sans-serif;">
-            Address
-        </td>
-        <td style="border:2px solid #000; padding-top:2px; padding-bottom:2px; padding-left:3px; padding-right:3px; font-weight:bold; font-size: 22px; font-family: sans-serif;">
-            ${inv.customerAddress || 'N/A'}
-        </td>
-
-    </tr>
-</table>
-
-
-      <table style="
-    width:100%;
-    border-collapse:collapse;
-    font-size:18px;
-    font-family:Arial, sans-serif;
-    margin-top:10px;
-">
-    </tr>
-    <tr>
-        <td style="border:2px solid #000; padding-top:2px; padding-bottom:2px; padding-left:3px; padding-right:3px; font-weight:bold; font-size: 22px; font-family: sans-serif;" >
-            From
-        </td>
-        <td style="border:2px solid #000; padding-top:2px; padding-bottom:2px; padding-left:3px; padding-right:3px; font-weight:bold; font-size: 22px; font-family: sans-serif;" >
-            ${inv.employeeName || 'N/A'}
-        </td>
-
-    </tr>
-
-    <tr>
-        <td style="border:2px solid #000; padding-top:2px; padding-bottom:2px; padding-left:3px; padding-right:3px; font-weight:bold; font-size: 22px; font-family: sans-serif;">
-            Contact
-        </td>
-        <td style="border:2px solid #000; padding-top:2px; padding-bottom:2px; padding-left:3px; padding-right:3px; font-weight:bold; font-size: 22px; font-family: sans-serif;">
-            ${inv.employeeMobileNumber || 'N/A'}
-        </td>
-
-    </tr>
-
-
-    <tr>
-        <td style="border:2px solid #000; padding-top:2px; padding-bottom:2px; padding-left:3px; padding-right:3px; font-weight:bold; font-size: 22px; font-family: sans-serif;">
-            Address
-        </td>
-        <td style="border:2px solid #000; padding-top:4px; padding-bottom:4px; padding-left:6px; padding-right:6px; font-weight:bold; font-size: 22px; font-family: sans-serif;">
-            ${inv.employeeAddress || 'N/A'}
-        </td>
-
-    </tr>
-</table>
-
-      <div class="footer">
-        <p>Generated by Bisni Sales Management | Thank you for Your Order!</p>
-      </div>
+      ${buildInvoiceHTML(inv)}
       <script>window.onload=function(){window.print();}<\/script>
     </body>
     </html>`;
@@ -356,7 +400,138 @@ const InvoiceRead = () => {
     printWindow.document.close();
   };
 
-  // Print filtered invoices list
+  // ===== NEW: Print only selected invoices =====
+  const handlePrintSelected = () => {
+    if (selectedInvoices.length === 0) {
+      setError('Please select at least one invoice to print');
+      return;
+    }
+
+    const allPages = selectedInvoices.map(inv => buildInvoiceHTML(inv)).join('');
+
+    const html = `<!DOCTYPE html>
+    <html>
+    <head>
+      <title>Selected Invoices (${selectedInvoices.length})</title>
+      <style>${printCSS}</style>
+    </head>
+    <body>
+      ${allPages}
+      <script>window.onload=function(){window.print();}<\/script>
+    </body>
+    </html>`;
+
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      setError('Please allow popups to print the invoices');
+      return;
+    }
+    printWindow.document.write(html);
+    printWindow.document.close();
+  };
+
+  // ===== Print selected invoices as LIST (summary) =====
+  const handlePrintSelectedList = () => {
+    if (selectedInvoices.length === 0) {
+      setError('Please select at least one invoice to print');
+      return;
+    }
+
+    const formatCur = (amount) => (amount || 0).toFixed(2);
+    const formatDt = (dateString) => {
+      if (!dateString) return 'N/A';
+      return new Date(dateString).toLocaleString('en-US', {
+        year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+      });
+    };
+
+    let totalCommission = 0;
+    let totalAmount = 0;
+
+    const invoiceRows = selectedInvoices.map((inv, i) => {
+      const commission = calculateInvoiceCommission(inv);
+      totalCommission += commission;
+      totalAmount += (inv.grandTotalAmount || 0);
+
+      return `
+        <tr>
+          <td style="text-align:center;">${i + 1}</td>
+          <td>${inv.invoiceId}</td>
+          <td>${formatDt(inv.createdAt)}</td>
+          <td>${inv.customerName || 'N/A'}</td>
+          <td>${inv.employeeName || 'N/A'}</td>
+          <td style="text-align:right;">Rs. ${formatCur(commission)}</td>
+          <td style="text-align:right;">Rs. ${formatCur(inv.grandTotalAmount || 0)}</td>
+        </tr>
+      `;
+    }).join('');
+
+    const html = `<!DOCTYPE html>
+    <html>
+    <head>
+      <title>Selected Invoices Report</title>
+      <style>${printCSS}</style>
+    </head>
+    <body>
+      <div class="header">
+        <h1>📋 SELECTED INVOICES REPORT</h1>
+        <p>Total Invoices: ${selectedInvoices.length}</p>
+        <div class="dates">
+          <span>Generated: ${formatDt(new Date().toISOString())}</span>
+          <span>Total Invoices: ${selectedInvoices.length}</span>
+        </div>
+      </div>
+
+      <div class="section">
+        <h3>Invoice List</h3>
+        <table>
+          <thead>
+            <tr>
+              <th style="text-align:center;width:30px;">#</th>
+              <th>Invoice ID</th>
+              <th>Date</th>
+              <th>Customer</th>
+              <th>Employee</th>
+              <th style="text-align:right;">Commission</th>
+              <th style="text-align:right;">Total Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${invoiceRows}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="section">
+        <table class="totals">
+          <tr>
+            <td>Total Commission:</td>
+            <td style="text-align:right;font-weight:600;color:#7c3aed;">Rs. ${formatCur(totalCommission)}</td>
+          </tr>
+          <tr class="grand-total">
+            <td>Grand Total Revenue:</td>
+            <td style="text-align:right;">Rs. ${formatCur(totalAmount)}</td>
+          </tr>
+        </table>
+      </div>
+
+      <div class="footer">
+        <p>Generated by Bisni Sales Management | Selected Invoices</p>
+      </div>
+      <script>window.onload=function(){window.print();}<\/script>
+    </body>
+    </html>`;
+
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      setError('Please allow popups to print the report');
+      return;
+    }
+    printWindow.document.write(html);
+    printWindow.document.close();
+  };
+
+  // Print filtered invoices list (existing)
   const handlePrintFilteredList = () => {
     if (invoices.length === 0) {
       setError('No invoices to print');
@@ -371,7 +546,6 @@ const InvoiceRead = () => {
       });
     };
 
-    // Calculate total commission and total amount
     let totalCommission = 0;
     let totalAmount = 0;
 
@@ -399,30 +573,7 @@ const InvoiceRead = () => {
     <html>
     <head>
       <title>Invoices Report - ${filterInfo}</title>
-      <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 25px; color: #1a1a2e; max-width: 800px; margin: 0 auto; }
-        .header { text-align: center; border-bottom: 3px solid #0891b2; padding-bottom: 15px; margin-bottom: 20px; }
-        .header h1 { color: #0891b2; margin: 0; font-size: 22px; letter-spacing: 1px; }
-        .header p { margin: 5px 0; color: #64748b; font-size: 13px; }
-        .header .dates { display: flex; justify-content: space-between; font-size: 11px; color: #94a3b8; margin-top: 8px; }
-        .section { margin-bottom: 18px; }
-        .section h3 { color: #06b6d4; border-bottom: 1px solid #e2e8f0; padding-bottom: 5px; font-size: 14px; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
-        .section p { font-size: 12px; margin-bottom: 3px; }
-        .section span { font-weight: 500; color: #334155; }
-        .info-grid { display: flex; gap: 25px; }
-        .info-box { flex: 1; }
-        table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-        th { background: #f0fdfa; padding: 9px 10px; text-align: left; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 2px solid #0891b2; color: #0f766e; }
-        td { padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 13px; }
-        .totals { width: 380px; margin-left: auto; margin-top: 8px; }
-        .totals td { border: none; padding: 5px 8px; font-size: 13px; }
-        .totals .grand-total { font-weight: 700; font-size: 15px; border-top: 2px solid #0891b2; color: #0891b2; }
-        .totals .grand-total td { padding-top: 8px; }
-        .footer { text-align: center; margin-top: 25px; font-size: 11px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 12px; }
-        @media print { body { padding: 10px; max-width: 100%; } }
-        @page { size: A4; margin: 8mm; }
-      </style>
+      <style>${printCSS}</style>
     </head>
     <body>
       <div class="header">
@@ -482,6 +633,36 @@ const InvoiceRead = () => {
     printWindow.document.close();
   };
 
+  // Print selected full invoices (each invoice on separate page)
+  const handlePrintSelectedFull = () => {
+    if (selectedInvoices.length === 0) {
+      setError('Please select at least one invoice to print');
+      return;
+    }
+
+    const allPages = selectedInvoices.map(inv => buildInvoiceHTML(inv)).join('');
+
+    const html = `<!DOCTYPE html>
+    <html>
+    <head>
+      <title>Selected Invoices (${selectedInvoices.length})</title>
+      <style>${printCSS}</style>
+    </head>
+    <body>
+      ${allPages}
+      <script>window.onload=function(){window.print();}<\/script>
+    </body>
+    </html>`;
+
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      setError('Please allow popups to print the invoices');
+      return;
+    }
+    printWindow.document.write(html);
+    printWindow.document.close();
+  };
+
   const clearMessages = () => {
     setError(null);
     setSuccess(null);
@@ -503,6 +684,40 @@ const InvoiceRead = () => {
   const calculateTotalItems = (products) => {
     return products.reduce((sum, product) => sum + (product.productQuantity || 0), 0);
   };
+
+  // Selected stats
+  const selectedStats = useMemo(() => {
+    let totalAmount = 0;
+    let totalCommission = 0;
+    selectedInvoices.forEach(inv => {
+      totalAmount += (inv.grandTotalAmount || 0);
+      totalCommission += calculateInvoiceCommission(inv);
+    });
+    return { totalAmount, totalCommission };
+  }, [selectedInvoices, employees]);
+
+  // Unique employees in current list for quick select
+  const uniqueEmployeesInList = useMemo(() => {
+    const map = {};
+    invoices.forEach(inv => {
+      if (!inv.employeeName) return;
+      if (!map[inv.employeeName]) map[inv.employeeName] = 0;
+      map[inv.employeeName]++;
+    });
+    return Object.entries(map).sort((a, b) => b[1] - a[1]);
+  }, [invoices]);
+
+  // Unique dates in current list for quick select
+  const uniqueDatesInList = useMemo(() => {
+    const map = {};
+    invoices.forEach(inv => {
+      if (!inv.createdAt) return;
+      const dateStr = new Date(inv.createdAt).toISOString().split('T')[0];
+      if (!map[dateStr]) map[dateStr] = 0;
+      map[dateStr]++;
+    });
+    return Object.entries(map).sort((a, b) => b[0].localeCompare(a[0]));
+  }, [invoices]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 py-3 sm:py-4 md:py-5 px-2 sm:px-3 md:px-4 lg:px-6">
@@ -606,11 +821,139 @@ const InvoiceRead = () => {
           </div>
         </div>
 
+        {/* ===== BULK SELECTION PANEL ===== */}
+        {invoices.length > 0 && (
+          <div className="bg-white rounded-lg shadow-md overflow-hidden mb-3 sm:mb-4 border-2 border-purple-200">
+            <div className="bg-gradient-to-r from-purple-600 to-pink-600 px-3 sm:px-4 py-2 sm:py-2.5 flex justify-between items-center">
+              <h2 className="text-xs sm:text-sm font-semibold text-white flex items-center">
+                <svg className="w-3.5 h-3.5 sm:w-4 sm:h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                </svg>
+                Bulk Selection
+              </h2>
+              {selectedIds.size > 0 && (
+                <span className="text-[10px] sm:text-xs bg-white text-purple-700 px-2 py-0.5 rounded-full font-bold">
+                  {selectedIds.size} selected
+                </span>
+              )}
+            </div>
+
+            <div className="p-2 sm:p-3 space-y-3">
+              {/* Quick select buttons */}
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={handleSelectAll}
+                  className={`px-3 py-1.5 rounded-md text-xs font-medium transition ${
+                    selectAll
+                      ? 'bg-purple-600 text-white hover:bg-purple-700'
+                      : 'bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200'
+                  }`}
+                >
+                  {selectAll ? '☑ Deselect All' : '☐ Select All (' + invoices.length + ')'}
+                </button>
+                <button
+                  onClick={clearSelection}
+                  disabled={selectedIds.size === 0}
+                  className="px-3 py-1.5 bg-gray-50 text-gray-700 hover:bg-gray-100 border border-gray-200 rounded-md text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  ✕ Clear Selection
+                </button>
+              </div>
+
+              {/* Quick select by employee */}
+              {uniqueEmployeesInList.length > 1 && (
+                <div>
+                  <label className="block text-[10px] sm:text-xs font-medium text-gray-500 mb-1">
+                    Quick Select by Employee:
+                  </label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {uniqueEmployeesInList.slice(0, 8).map(([empName, count]) => (
+                      <button
+                        key={empName}
+                        onClick={() => selectByEmployee(empName)}
+                        className="px-2 py-0.5 bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 rounded text-[10px] sm:text-xs"
+                        title={`Select all invoices from ${empName}`}
+                      >
+                        {empName} ({count})
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Quick select by date */}
+              {uniqueDatesInList.length > 1 && (
+                <div>
+                  <label className="block text-[10px] sm:text-xs font-medium text-gray-500 mb-1">
+                    Quick Select by Date:
+                  </label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {uniqueDatesInList.slice(0, 8).map(([dateStr, count]) => (
+                      <button
+                        key={dateStr}
+                        onClick={() => selectByDate(dateStr)}
+                        className="px-2 py-0.5 bg-cyan-50 text-cyan-700 hover:bg-cyan-100 border border-cyan-200 rounded text-[10px] sm:text-xs"
+                        title={`Select all invoices from ${dateStr}`}
+                      >
+                        {dateStr} ({count})
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Selected stats + print actions */}
+              {selectedIds.size > 0 && (
+                <div className="bg-purple-50 border border-purple-200 rounded-md p-2 sm:p-3 space-y-2">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
+                    <div>
+                      <span className="text-gray-500">Selected:</span>{' '}
+                      <span className="font-bold text-purple-700">{selectedIds.size}</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">Total Amount:</span>{' '}
+                      <span className="font-bold text-green-700">
+                        Rs. {formatCurrency(selectedStats.totalAmount)}
+                      </span>
+                    </div>
+                    <div className="col-span-2 sm:col-span-1">
+                      <span className="text-gray-500">Total Commission:</span>{' '}
+                      <span className="font-bold text-blue-700">
+                        Rs. {formatCurrency(selectedStats.totalCommission)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row gap-2 pt-1 border-t border-purple-200">
+                    <button
+                      onClick={handlePrintSelected}
+                      className="flex-1 px-3 py-2 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-md hover:from-green-700 hover:to-emerald-700 text-xs font-medium flex items-center justify-center gap-1.5"
+                    >
+                      🖨️ Print Selected Full Invoices ({selectedIds.size})
+                    </button>
+                    <button
+                      onClick={handlePrintSelectedList}
+                      className="flex-1 px-3 py-2 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-md hover:from-purple-700 hover:to-pink-700 text-xs font-medium flex items-center justify-center gap-1.5"
+                    >
+                      📋 Print Selected Summary List
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Invoices List */}
         <div className="bg-white rounded-lg shadow-md overflow-hidden">
           <div className="bg-gradient-to-r from-blue-600 to-cyan-600 px-3 sm:px-4 py-2 sm:py-2.5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
             <h2 className="text-xs sm:text-sm font-semibold text-white">
               Invoice List ({invoices.length})
+              {selectedIds.size > 0 && (
+                <span className="ml-2 text-[10px] bg-purple-500 text-white px-1.5 py-0.5 rounded-full">
+                  {selectedIds.size} selected
+                </span>
+              )}
             </h2>
             <div className="flex items-center gap-2 w-full sm:w-auto">
               <button onClick={handlePrintFilteredList}
@@ -646,17 +989,30 @@ const InvoiceRead = () => {
               {/* Mobile Card View */}
               <div className="block lg:hidden">
                 {invoices.map((invoice) => (
-                  <div key={invoice._id} className="border-b border-gray-200 p-3 hover:bg-gray-50 transition duration-150">
-                    <div className="flex justify-between items-start mb-2">
-                      <div className="flex-1 min-w-0">
-                        <div className="text-xs font-medium text-gray-900 truncate">{invoice.invoiceId}</div>
-                        <div className="text-xs text-gray-500">{formatDate(invoice.createdAt)}</div>
+                  <div
+                    key={invoice._id}
+                    className={`border-b border-gray-200 p-3 transition duration-150 ${
+                      selectedIds.has(invoice._id) ? 'bg-purple-50' : 'hover:bg-gray-50'
+                    }`}
+                  >
+                    <div className="flex justify-between items-start mb-2 gap-2">
+                      <div className="flex items-start gap-2 flex-1 min-w-0">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(invoice._id)}
+                          onChange={() => toggleSelect(invoice._id)}
+                          className="mt-0.5 h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded cursor-pointer flex-shrink-0"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-xs font-medium text-gray-900 truncate">{invoice.invoiceId}</div>
+                          <div className="text-xs text-gray-500">{formatDate(invoice.createdAt)}</div>
+                        </div>
                       </div>
-                      <div className="text-right flex-shrink-0 ml-2">
+                      <div className="text-right flex-shrink-0">
                         <div className="text-xs font-bold text-green-600">Rs. {formatCurrency(invoice.grandTotalAmount)}</div>
                       </div>
                     </div>
-                    <div className="grid grid-cols-2 gap-2 mb-2 text-xs">
+                    <div className="grid grid-cols-2 gap-2 mb-2 text-xs pl-6">
                       <div>
                         <span className="text-gray-500">Customer: </span>
                         <span className="font-medium">{invoice.customerName}</span>
@@ -694,6 +1050,15 @@ const InvoiceRead = () => {
               <table className="min-w-full divide-y divide-gray-200 hidden lg:table">
                 <thead className="bg-gray-50">
                   <tr>
+                    <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase w-10">
+                      <input
+                        type="checkbox"
+                        checked={selectAll}
+                        onChange={handleSelectAll}
+                        className="h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded cursor-pointer"
+                        title="Select / Deselect all"
+                      />
+                    </th>
                     <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Invoice ID</th>
                     <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
                     <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase hidden md:table-cell">Customer</th>
@@ -705,7 +1070,20 @@ const InvoiceRead = () => {
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
                   {invoices.map((invoice) => (
-                    <tr key={invoice._id} className="hover:bg-gray-50 transition duration-150">
+                    <tr
+                      key={invoice._id}
+                      className={`transition duration-150 ${
+                        selectedIds.has(invoice._id) ? 'bg-purple-50' : 'hover:bg-gray-50'
+                      }`}
+                    >
+                      <td className="px-3 py-2 whitespace-nowrap text-center">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(invoice._id)}
+                          onChange={() => toggleSelect(invoice._id)}
+                          className="h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded cursor-pointer"
+                        />
+                      </td>
                       <td className="px-3 py-2 whitespace-nowrap">
                         <div className="text-xs font-medium text-gray-900">{invoice.invoiceId}</div>
                         <div className="text-xs text-gray-500 md:hidden">{formatDate(invoice.createdAt)}</div>
