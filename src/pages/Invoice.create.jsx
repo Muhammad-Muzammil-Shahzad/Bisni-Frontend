@@ -19,6 +19,8 @@ const InvoiceCreate = () => {
   // Refs for fast keyboard navigation
   const customerNameRef = useRef(null);
   const customerMobile1Ref = useRef(null);
+  const customerMobile2Ref = useRef(null);
+  const customerAddressRef = useRef(null);
   const addProductBtnRef = useRef(null);
 
   const [formData, setFormData] = useState({
@@ -63,13 +65,11 @@ const InvoiceCreate = () => {
   };
 
   // ===== MEMOIZED LOOKUPS (High Speed) =====
-  // Unique product names - memoized
   const uniqueProductNames = useMemo(() => {
     const names = stocks.map(stock => stock.productName);
     return [...new Set(names)].filter(Boolean).sort();
   }, [stocks]);
 
-  // Product name -> categories map - memoized (O(1) lookup)
   const categoriesMap = useMemo(() => {
     const map = {};
     stocks.forEach(stock => {
@@ -84,7 +84,6 @@ const InvoiceCreate = () => {
     return result;
   }, [stocks]);
 
-  // (productName + category) -> colors array map - memoized (O(1) lookup)
   const colorsMap = useMemo(() => {
     const map = {};
     stocks.forEach(stock => {
@@ -96,7 +95,6 @@ const InvoiceCreate = () => {
     return map;
   }, [stocks]);
 
-  // (productName + category + color) -> stock item map - memoized (O(1) lookup)
   const stockItemMap = useMemo(() => {
     const map = {};
     stocks.forEach(stock => {
@@ -106,7 +104,6 @@ const InvoiceCreate = () => {
     return map;
   }, [stocks]);
 
-  // Filtered employees based on search - memoized
   const filteredEmployees = useMemo(() => {
     if (!employeeSearch.trim()) return employees;
     const q = employeeSearch.toLowerCase().trim();
@@ -145,7 +142,6 @@ const InvoiceCreate = () => {
       employeeMobileNumber: employee.employeeMobileNumber || ''
     }));
     setError(null);
-    // Focus customer name for fast flow
     setTimeout(() => customerNameRef.current?.focus(), 50);
   }, []);
 
@@ -168,7 +164,7 @@ const InvoiceCreate = () => {
           productCategory: '',
           productColor: '',
           productSalePrice: '',
-          productQuantity: 1,
+          productQuantity: '',
           productTotalAmount: 0
         }
       ]
@@ -204,7 +200,7 @@ const InvoiceCreate = () => {
           productCategory: '',
           productColor: '',
           productSalePrice: '',
-          productQuantity: 1,
+          productQuantity: '',
           productTotalAmount: 0
         };
       } else if (field === 'productCategory') {
@@ -213,36 +209,32 @@ const InvoiceCreate = () => {
           productCategory: safeValue,
           productColor: '',
           productSalePrice: '',
-          productQuantity: 1,
+          productQuantity: '',
           productTotalAmount: 0
         };
       } else if (field === 'productColor') {
-        const selectedStock = getStockItem(
-          updatedProducts[index].productName,
-          updatedProducts[index].productCategory,
-          safeValue
-        );
-        const price = selectedStock ? (selectedStock.productPurchasePrice || '') : (updatedProducts[index].productSalePrice || '');
-        const qty = parseInt(updatedProducts[index].productQuantity) || 1;
         updatedProducts[index] = {
           ...updatedProducts[index],
           productColor: safeValue,
-          productSalePrice: price,
-          productTotalAmount: (parseFloat(price) || 0) * qty
+          productSalePrice: '',
+          productQuantity: '',
+          productTotalAmount: 0
         };
       } else if (field === 'productSalePrice') {
         const numValue = parseFloat(safeValue) || 0;
+        const qty = parseInt(updatedProducts[index].productQuantity) || 0;
         updatedProducts[index] = {
           ...updatedProducts[index],
           productSalePrice: safeValue,
-          productTotalAmount: numValue * (parseInt(updatedProducts[index].productQuantity) || 0)
+          productTotalAmount: numValue * qty
         };
       } else if (field === 'productQuantity') {
         const numValue = parseInt(safeValue) || 0;
+        const price = parseFloat(updatedProducts[index].productSalePrice) || 0;
         updatedProducts[index] = {
           ...updatedProducts[index],
           productQuantity: safeValue,
-          productTotalAmount: (parseFloat(updatedProducts[index].productSalePrice) || 0) * numValue
+          productTotalAmount: price * numValue
         };
       } else {
         updatedProducts[index] = {
@@ -253,7 +245,7 @@ const InvoiceCreate = () => {
 
       return { ...prev, products: updatedProducts };
     });
-  }, [getStockItem]);
+  }, []);
 
   // ===== TOTALS =====
   const grandTotal = useMemo(() => {
@@ -341,7 +333,6 @@ const InvoiceCreate = () => {
 
       const response = await axios.post(`${API_BASE_URL}/invoice`, invoiceData);
 
-      // Save last invoice for quick view
       setLastInvoice({
         ...invoiceData,
         createdAt: new Date().toISOString(),
@@ -351,7 +342,6 @@ const InvoiceCreate = () => {
 
       setSuccess(response.data.message || 'Invoice created successfully!');
 
-      // Reset form but keep employee selected for fast repeated invoices
       setFormData(prev => ({
         employeeCategory: prev.employeeCategory,
         employeeName: prev.employeeName,
@@ -365,10 +355,7 @@ const InvoiceCreate = () => {
         deliveryCharges: 0
       }));
 
-      // Refocus customer name for next invoice
       setTimeout(() => customerNameRef.current?.focus(), 100);
-
-      // Auto-hide success after 4s
       setTimeout(() => setSuccess(null), 4000);
     } catch (error) {
       console.error('Error creating invoice:', error);
@@ -404,50 +391,130 @@ const InvoiceCreate = () => {
     setSuccess(null);
   };
 
-  // ===== KEYBOARD SHORTCUTS (High Speed) =====
+  // ===== KEYBOARD SHORTCUTS =====
   useEffect(() => {
     const handleKeyDown = (e) => {
-      // Ctrl/Cmd + Enter = Submit
-      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-        e.preventDefault();
-        document.querySelector('form')?.requestSubmit();
+      // Enter = Submit (only when not in textarea and not in a product input)
+      if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+        const target = e.target;
+        const isTextarea = target.tagName === 'TEXTAREA';
+        const isProductInput = target.closest('[data-product-input]');
+        
+        if (!isTextarea && !isProductInput) {
+          e.preventDefault();
+          document.querySelector('form')?.requestSubmit();
+        }
       }
-      // Ctrl/Cmd + K = Add product
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+      // Ctrl+A = Add product (prevent select all)
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
         e.preventDefault();
         addProduct();
-      }
-      // Ctrl/Cmd + Shift + R = Reset form
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'r') {
-        e.preventDefault();
-        handleReset();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [addProduct]);
 
+  // ===== CUSTOMER TAB CYCLE =====
+  const handleCustomerTab = useCallback((e, currentField) => {
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const fields = ['customerName', 'customerMobile1', 'customerMobile2', 'customerAddress'];
+      const currentIndex = fields.indexOf(currentField);
+      const nextIndex = (currentIndex + 1) % fields.length;
+      
+      const refs = {
+        customerName: customerNameRef,
+        customerMobile1: customerMobile1Ref,
+        customerMobile2: customerMobile2Ref,
+        customerAddress: customerAddressRef
+      };
+      
+      const nextRef = refs[fields[nextIndex]];
+      if (nextRef?.current) {
+        nextRef.current.focus();
+      }
+    }
+  }, []);
+
   // ===== RENDER =====
   return (
-    <div className="min-h-screen bg-gray-50 py-4 px-3 sm:px-6 lg:px-8">
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-indigo-50 to-purple-50 py-4 px-3 sm:px-6 lg:px-8">
       <div className="max-w-7xl mx-auto">
+        {/* Sticky Employee Header */}
+        {selectedEmployee && (
+          <div className="sticky top-0 z-50 mb-4 animate-slide-down">
+            <div className="bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-500 rounded-lg shadow-lg px-4 py-2.5 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="h-8 w-8 rounded-full bg-white/20 flex items-center justify-center backdrop-blur-sm">
+                  <span className="text-white font-bold text-sm">
+                    {(selectedEmployee.employeeName || '?').charAt(0).toUpperCase()}
+                  </span>
+                </div>
+                <div>
+                  <p className="text-xs text-white/70 font-medium">Selected Employee</p>
+                  <p className="text-sm font-bold text-white">{selectedEmployee.employeeName}</p>
+                </div>
+                <span className="px-2 py-0.5 bg-white/20 rounded-full text-[10px] text-white font-medium backdrop-blur-sm">
+                  {selectedEmployee.employeeCategory}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                {lastInvoice && (
+                  <div className="hidden sm:flex items-center gap-2 px-3 py-1 bg-white/10 rounded-full backdrop-blur-sm">
+                    <span className="text-[10px] text-white/70">Last Customer:</span>
+                    <span className="text-xs font-semibold text-white">{lastInvoice.customerName}</span>
+                  </div>
+                )}
+                <button
+                  onClick={() => {
+                    setSelectedEmployee(null);
+                    setFormData(prev => ({
+                      ...prev,
+                      employeeCategory: '',
+                      employeeName: '',
+                      employeeAddress: '',
+                      employeeMobileNumber: ''
+                    }));
+                  }}
+                  className="text-white/60 hover:text-white transition-colors p-1"
+                  title="Change employee"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Header */}
-        <div className="mb-4 flex flex-col sm:flex-row justify-between items-center gap-2">
-          <h1 className="text-2xl font-bold text-gray-900">CREATE INVOICE</h1>
-          <div className="flex items-center gap-2 text-xs text-gray-500">
-            <span className="hidden sm:inline">Shortcuts:</span>
-            <kbd className="px-1.5 py-0.5 bg-white border rounded text-[10px]">Ctrl+Enter</kbd>
-            <span>Submit</span>
-            <kbd className="px-1.5 py-0.5 bg-white border rounded text-[10px]">Ctrl+K</kbd>
-            <span>Add</span>
+        <div className="mb-6 text-center">
+          <h1 className="text-3xl sm:text-4xl font-extrabold bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-500 bg-clip-text text-transparent">
+            CREATE INVOICE
+          </h1>
+          <div className="mt-2 flex items-center justify-center gap-3 text-[10px] text-gray-400">
+            <span className="flex items-center gap-1">
+              <kbd className="px-1.5 py-0.5 bg-white border border-gray-200 rounded text-[9px] shadow-sm">Enter</kbd>
+              <span>Submit</span>
+            </span>
+            <span className="flex items-center gap-1">
+              <kbd className="px-1.5 py-0.5 bg-white border border-gray-200 rounded text-[9px] shadow-sm">Ctrl+A</kbd>
+              <span>Add Product</span>
+            </span>
+            <span className="flex items-center gap-1">
+              <kbd className="px-1.5 py-0.5 bg-white border border-gray-200 rounded text-[9px] shadow-sm">Tab</kbd>
+              <span>Navigate Customer Fields</span>
+            </span>
           </div>
         </div>
 
         {/* Alert Messages */}
         {error && (
-          <div className="mb-3 bg-red-50 border border-red-200 p-3 rounded flex justify-between items-center">
+          <div className="mb-3 bg-red-50 border border-red-200 p-3 rounded-lg flex justify-between items-center shadow-sm animate-slide-down">
             <p className="text-sm text-red-700">{error}</p>
-            <button onClick={clearMessages} className="text-red-400 hover:text-red-600">
+            <button onClick={clearMessages} className="text-red-400 hover:text-red-600 transition-colors">
               <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
               </svg>
@@ -456,9 +523,9 @@ const InvoiceCreate = () => {
         )}
 
         {success && (
-          <div className="mb-3 bg-green-50 border border-green-200 p-3 rounded flex justify-between items-center">
-            <p className="text-sm text-green-700">{success}</p>
-            <button onClick={clearMessages} className="text-green-400 hover:text-green-600">
+          <div className="mb-3 bg-emerald-50 border border-emerald-200 p-3 rounded-lg flex justify-between items-center shadow-sm animate-slide-down">
+            <p className="text-sm text-emerald-700">{success}</p>
+            <button onClick={clearMessages} className="text-emerald-400 hover:text-emerald-600 transition-colors">
               <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
               </svg>
@@ -468,11 +535,25 @@ const InvoiceCreate = () => {
 
         {/* Last Invoice Summary */}
         {showLastInvoice && lastInvoice && (
-          <div className="mb-3 bg-blue-50 border border-blue-200 rounded p-3 flex justify-between items-center">
-            <div className="text-xs text-blue-800">
-              <span className="font-semibold">Last Invoice:</span> {lastInvoice.customerName} — {lastInvoice.products.length} item(s) — {formatCurrency(lastInvoice.grandTotalAmount)}
+          <div className="mb-4 bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-200 rounded-lg p-3 flex justify-between items-center shadow-sm animate-slide-down">
+            <div className="flex items-center gap-3">
+              <div className="h-8 w-8 rounded-full bg-gradient-to-r from-indigo-500 to-purple-500 flex items-center justify-center">
+                <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+              <div>
+                <p className="text-[10px] text-indigo-600 font-medium">Last Invoice Created</p>
+                <p className="text-sm font-bold text-indigo-900">{lastInvoice.customerName}</p>
+              </div>
+              <span className="text-[10px] text-indigo-500 bg-white/60 px-2 py-0.5 rounded-full">
+                {lastInvoice.products.length} item(s)
+              </span>
+              <span className="text-sm font-bold text-indigo-700">
+                {formatCurrency(lastInvoice.grandTotalAmount)}
+              </span>
             </div>
-            <button onClick={() => setShowLastInvoice(false)} className="text-blue-400 hover:text-blue-600">
+            <button onClick={() => setShowLastInvoice(false)} className="text-indigo-400 hover:text-indigo-600 transition-colors">
               <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
               </svg>
@@ -481,188 +562,195 @@ const InvoiceCreate = () => {
         )}
 
         {/* Employee Selection Panel */}
-        <div className="mb-4">
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-            <div className="bg-gradient-to-r from-blue-600 to-cyan-600 px-4 py-2 flex justify-between items-center">
-              <h2 className="text-sm font-semibold text-white">Select Employee</h2>
-              <input
-                type="text"
-                placeholder="Search employee..."
-                value={employeeSearch}
-                onChange={(e) => setEmployeeSearch(e.target.value)}
-                className="px-2 py-1 text-xs rounded text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-white w-40 sm:w-56"
-              />
-            </div>
+        {!selectedEmployee && (
+          <div className="mb-6">
+            <div className="bg-white rounded-xl shadow-md border border-gray-100 overflow-hidden">
+              <div className="bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-500 px-4 py-2.5 flex justify-between items-center">
+                <h2 className="text-sm font-semibold text-white flex items-center gap-2">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                  </svg>
+                  Select Employee
+                </h2>
+                <input
+                  type="text"
+                  placeholder="Search employee..."
+                  value={employeeSearch}
+                  onChange={(e) => setEmployeeSearch(e.target.value)}
+                  className="px-3 py-1.5 text-xs rounded-lg text-gray-900 placeholder-gray-300 bg-white/20 backdrop-blur-sm border border-white/30 focus:outline-none focus:ring-2 focus:ring-white/50 w-40 sm:w-56 transition-all"
+                />
+              </div>
 
-            <div className="p-3">
-              {fetchLoading ? (
-                <div className="flex justify-center items-center py-6">
-                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
-                </div>
-              ) : filteredEmployees.length === 0 ? (
-                <div className="text-center py-6">
-                  <p className="text-xs text-gray-500">No employees available</p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
-                  {filteredEmployees.map((employee) => (
-                    <button
-                      key={employee._id}
-                      type="button"
-                      onClick={() => handleSelectEmployee(employee)}
-                      className={`text-left p-2 rounded transition duration-200 text-sm ${
-                        selectedEmployee?._id === employee._id
-                          ? 'bg-blue-50 border border-blue-300 ring-1 ring-blue-400'
-                          : 'bg-gray-50 border border-transparent hover:bg-gray-100'
-                      }`}
-                    >
-                      <div className="flex items-center space-x-2">
-                        <div className={`shrink-0 h-7 w-7 rounded-full flex items-center justify-center ${
+              <div className="p-4">
+                {fetchLoading ? (
+                  <div className="flex justify-center items-center py-8">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+                  </div>
+                ) : filteredEmployees.length === 0 ? (
+                  <div className="text-center py-8">
+                    <p className="text-sm text-gray-400">No employees available</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
+                    {filteredEmployees.map((employee) => (
+                      <button
+                        key={employee._id}
+                        type="button"
+                        onClick={() => handleSelectEmployee(employee)}
+                        className={`group text-center p-3 rounded-xl transition-all duration-200 ${
                           selectedEmployee?._id === employee._id
-                            ? 'bg-gradient-to-r from-blue-500 to-cyan-500'
-                            : 'bg-gradient-to-r from-gray-400 to-gray-500'
-                        }`}>
-                          <span className="text-white font-medium text-xs">
-                            {(employee.employeeName || '?').charAt(0).toUpperCase()}
-                          </span>
+                            ? 'bg-gradient-to-br from-indigo-50 to-purple-50 border-2 border-indigo-400 ring-2 ring-indigo-200 shadow-md'
+                            : 'bg-gray-50 border-2 border-transparent hover:bg-gradient-to-br hover:from-indigo-50 hover:to-purple-50 hover:border-indigo-200 hover:shadow-sm'
+                        }`}
+                      >
+                        <div className="flex flex-col items-center justify-center gap-2">
+                          <div className={`h-10 w-10 rounded-full flex items-center justify-center transition-all duration-200 ${
+                            selectedEmployee?._id === employee._id
+                              ? 'bg-gradient-to-r from-indigo-500 to-purple-500 shadow-md'
+                              : 'bg-gradient-to-r from-gray-300 to-gray-400 group-hover:from-indigo-400 group-hover:to-purple-400'
+                          }`}>
+                            <span className="text-white font-bold text-sm">
+                              {(employee.employeeName || '?').charAt(0).toUpperCase()}
+                            </span>
+                          </div>
+                          <div className="min-w-0 w-full">
+                            <p className="text-xs font-semibold text-gray-800 truncate text-center">
+                              {employee.employeeName}
+                            </p>
+                            <p className="text-[10px] text-gray-400 truncate text-center mt-0.5">
+                              {employee.employeeCategory}
+                            </p>
+                          </div>
                         </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs font-medium text-gray-900 truncate">
-                            {employee.employeeName}
-                          </p>
-                          <p className="text-[10px] text-gray-500 truncate">
-                            {employee.employeeCategory}
-                          </p>
-                        </div>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         {/* Invoice Form */}
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-          <div className="bg-gradient-to-r from-blue-600 to-cyan-600 px-4 py-2 flex justify-between items-center">
-            <h2 className="text-sm font-semibold text-white">Invoice Details</h2>
+        <div className="bg-white rounded-xl shadow-md border border-gray-100 overflow-hidden">
+          <div className="bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-500 px-4 py-2.5 flex justify-between items-center">
+            <h2 className="text-sm font-semibold text-white flex items-center gap-2">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              Invoice Details
+            </h2>
             <button
               type="button"
               onClick={handleReset}
-              className="text-[10px] text-white/80 hover:text-white underline"
+              className="text-[10px] text-white/70 hover:text-white underline transition-colors"
             >
               Reset Form
             </button>
           </div>
 
-          <form onSubmit={handleSubmit} className="p-4 space-y-4">
+          <form onSubmit={handleSubmit} className="p-4 sm:p-6 space-y-5">
             {/* Employee Information (Auto-filled) */}
             <div>
-              <h3 className="text-sm font-medium text-gray-900 mb-2 flex items-center">
-                <svg className="w-4 h-4 mr-1.5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                </svg>
+              <h3 className="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                <span className="h-5 w-1 bg-gradient-to-b from-indigo-500 to-purple-500 rounded-full"></span>
                 Employee Information
               </h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 p-3 bg-gray-50 rounded border border-gray-200">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 p-4 bg-gradient-to-br from-gray-50 to-indigo-50/30 rounded-xl border border-gray-100">
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Employee Name</label>
+                  <label className="block text-[10px] font-medium text-gray-400 mb-1 uppercase tracking-wider">Employee Name</label>
                   <input type="text" value={formData.employeeName || ''} readOnly
-                    className="w-full px-2 py-1.5 bg-white border border-gray-300 rounded text-gray-700 text-xs" />
+                    className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-gray-700 text-xs font-medium" />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Category</label>
+                  <label className="block text-[10px] font-medium text-gray-400 mb-1 uppercase tracking-wider">Category</label>
                   <input type="text" value={formData.employeeCategory || ''} readOnly
-                    className="w-full px-2 py-1.5 bg-white border border-gray-300 rounded text-gray-700 text-xs" />
+                    className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-gray-700 text-xs font-medium" />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Mobile Number</label>
+                  <label className="block text-[10px] font-medium text-gray-400 mb-1 uppercase tracking-wider">Mobile Number</label>
                   <input type="text" value={formData.employeeMobileNumber || ''} readOnly
-                    className="w-full px-2 py-1.5 bg-white border border-gray-300 rounded text-gray-700 text-xs" />
+                    className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-gray-700 text-xs font-medium" />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Address</label>
+                  <label className="block text-[10px] font-medium text-gray-400 mb-1 uppercase tracking-wider">Address</label>
                   <input type="text" value={formData.employeeAddress || ''} readOnly
-                    className="w-full px-2 py-1.5 bg-white border border-gray-300 rounded text-gray-700 text-xs" />
+                    className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-gray-700 text-xs font-medium" />
                 </div>
               </div>
             </div>
 
             {/* Customer Information */}
             <div>
-              <h3 className="text-sm font-medium text-gray-900 mb-2 flex items-center">
-                <svg className="w-4 h-4 mr-1.5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-                </svg>
+              <h3 className="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                <span className="h-5 w-1 bg-gradient-to-b from-emerald-500 to-teal-500 rounded-full"></span>
                 Customer Information
               </h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                <div>
-                  <label htmlFor="customerName" className="block text-xs font-medium text-gray-700 mb-1">
-                    Customer Name <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    ref={customerNameRef}
-                    type="text" id="customerName" name="customerName"
-                    value={formData.customerName || ''}
-                    onChange={handleInputChange} required placeholder="Enter customer name"
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        customerMobile1Ref.current?.focus();
-                      }
-                    }}
-                    className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs focus:ring-2 focus:ring-blue-500 focus:border-transparent transition duration-200 text-gray-900 placeholder-gray-400" />
+              <div className="space-y-3">
+                {/* Row 1: Customer Name + Mobile 1 + Mobile 2 */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label htmlFor="customerName" className="block text-[10px] font-medium text-gray-500 mb-1 uppercase tracking-wider">
+                      Customer Name <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      ref={customerNameRef}
+                      type="text" id="customerName" name="customerName"
+                      value={formData.customerName || ''}
+                      onChange={handleInputChange} required placeholder="Enter customer name"
+                      onKeyDown={(e) => handleCustomerTab(e, 'customerName')}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all duration-200 text-gray-900 placeholder-gray-300 bg-white shadow-sm" />
+                  </div>
+                  <div>
+                    <label htmlFor="customerMobileNumber1" className="block text-[10px] font-medium text-gray-500 mb-1 uppercase tracking-wider">
+                      Mobile Number 1 <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      ref={customerMobile1Ref}
+                      type="tel" id="customerMobileNumber1" name="customerMobileNumber1"
+                      value={formData.customerMobileNumber1 || ''}
+                      onChange={handleInputChange} required placeholder="Primary mobile number"
+                      onKeyDown={(e) => handleCustomerTab(e, 'customerMobile1')}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all duration-200 text-gray-900 placeholder-gray-300 bg-white shadow-sm" />
+                  </div>
+                  <div>
+                    <label htmlFor="customerMobileNumber2" className="block text-[10px] font-medium text-gray-500 mb-1 uppercase tracking-wider">
+                      Mobile Number 2
+                    </label>
+                    <input
+                      ref={customerMobile2Ref}
+                      type="tel" id="customerMobileNumber2" name="customerMobileNumber2"
+                      value={formData.customerMobileNumber2 || ''}
+                      onChange={handleInputChange} placeholder="Secondary mobile number"
+                      onKeyDown={(e) => handleCustomerTab(e, 'customerMobile2')}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all duration-200 text-gray-900 placeholder-gray-300 bg-white shadow-sm" />
+                  </div>
                 </div>
+                {/* Row 2: Customer Address (Full Width) */}
                 <div>
-                  <label htmlFor="customerMobileNumber1" className="block text-xs font-medium text-gray-700 mb-1">
-                    Mobile Number 1 <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    ref={customerMobile1Ref}
-                    type="tel" id="customerMobileNumber1" name="customerMobileNumber1"
-                    value={formData.customerMobileNumber1 || ''}
-                    onChange={handleInputChange} required placeholder="Primary mobile number"
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        addProductBtnRef.current?.focus();
-                      }
-                    }}
-                    className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs focus:ring-2 focus:ring-blue-500 focus:border-transparent transition duration-200 text-gray-900 placeholder-gray-400" />
-                </div>
-                <div>
-                  <label htmlFor="customerMobileNumber2" className="block text-xs font-medium text-gray-700 mb-1">
-                    Mobile Number 2
-                  </label>
-                  <input type="tel" id="customerMobileNumber2" name="customerMobileNumber2"
-                    value={formData.customerMobileNumber2 || ''}
-                    onChange={handleInputChange} placeholder="Secondary mobile number"
-                    className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs focus:ring-2 focus:ring-blue-500 focus:border-transparent transition duration-200 text-gray-900 placeholder-gray-400" />
-                </div>
-                <div>
-                  <label htmlFor="customerAddress" className="block text-xs font-medium text-gray-700 mb-1">
+                  <label htmlFor="customerAddress" className="block text-[10px] font-medium text-gray-500 mb-1 uppercase tracking-wider">
                     Customer Address <span className="text-red-500">*</span>
                   </label>
-                  <textarea id="customerAddress" name="customerAddress"
+                  <textarea
+                    ref={customerAddressRef}
+                    id="customerAddress" name="customerAddress"
                     value={formData.customerAddress || ''}
-                    onChange={handleInputChange} required rows="1" placeholder="Enter customer address"
-                    className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs focus:ring-2 focus:ring-blue-500 focus:border-transparent transition duration-200 text-gray-900 placeholder-gray-400 resize-none" />
+                    onChange={handleInputChange} required rows="2"
+                    placeholder="Enter complete customer address"
+                    onKeyDown={(e) => handleCustomerTab(e, 'customerAddress')}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all duration-200 text-gray-900 placeholder-gray-300 bg-white shadow-sm resize-none" />
                 </div>
               </div>
             </div>
 
             {/* Products Section */}
-            <div className="border-t border-gray-200 pt-3">
+            <div className="border-t border-gray-100 pt-4">
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-3 gap-2">
-                <h3 className="text-sm font-medium text-gray-900 flex items-center">
-                  <svg className="w-4 h-4 mr-1.5 text-cyan-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-                  </svg>
+                <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-2">
+                  <span className="h-5 w-1 bg-gradient-to-b from-amber-500 to-orange-500 rounded-full"></span>
                   Products
                   {totalItems > 0 && (
-                    <span className="ml-2 text-[10px] bg-cyan-100 text-cyan-700 px-2 py-0.5 rounded-full font-medium">
+                    <span className="ml-2 text-[10px] bg-gradient-to-r from-amber-100 to-orange-100 text-amber-700 px-2.5 py-0.5 rounded-full font-semibold">
                       {totalItems} item{totalItems > 1 ? 's' : ''}
                     </span>
                   )}
@@ -670,36 +758,40 @@ const InvoiceCreate = () => {
                 <button
                   ref={addProductBtnRef}
                   type="button" onClick={addProduct}
-                  className="inline-flex items-center px-3 py-1.5 bg-green-600 text-white rounded hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 transition duration-200 text-xs font-medium w-full sm:w-auto justify-center">
-                  <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  className="inline-flex items-center px-4 py-2 bg-gradient-to-r from-emerald-500 to-teal-500 text-white rounded-lg hover:from-emerald-600 hover:to-teal-600 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 transition-all duration-200 text-xs font-semibold shadow-sm w-full sm:w-auto justify-center">
+                  <svg className="w-3.5 h-3.5 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" />
                   </svg>
                   Add Product
+                  <span className="ml-2 text-[9px] opacity-70 hidden sm:inline">(Ctrl+A)</span>
                 </button>
               </div>
 
               {formData.products.length === 0 && (
-                <div className="text-center py-8 bg-gray-50 rounded border border-dashed border-gray-300">
-                  <p className="text-xs text-gray-500">No products added yet</p>
-                  <p className="text-xs text-gray-400 mt-1">Click "Add Product" to add items</p>
+                <div className="text-center py-10 bg-gradient-to-br from-gray-50 to-indigo-50/30 rounded-xl border-2 border-dashed border-gray-200">
+                  <svg className="w-10 h-10 mx-auto text-gray-300 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+                  </svg>
+                  <p className="text-sm text-gray-400 font-medium">No products added yet</p>
+                  <p className="text-xs text-gray-300 mt-1">Click "Add Product" or press Ctrl+A to add items</p>
                 </div>
               )}
 
-              <div className="space-y-2">
+              <div className="space-y-3">
                 {formData.products.map((product, index) => {
                   const categories = getCategoriesForProduct(product.productName);
                   const colorStocks = getColorsForProduct(product.productName, product.productCategory);
                   const selectedStock = getStockItem(product.productName, product.productCategory, product.productColor);
 
                   return (
-                    <div key={index} className="bg-gray-50 rounded border border-gray-200 p-2.5">
-                      <div className="flex justify-between items-center mb-2">
+                    <div key={index} data-product-input className="bg-gradient-to-br from-gray-50 to-indigo-50/20 rounded-xl border border-gray-100 p-3 shadow-sm">
+                      <div className="flex justify-between items-center mb-3">
                         <div className="flex items-center gap-2">
-                          <span className="text-xs font-semibold text-gray-700 bg-white px-2 py-0.5 rounded border">
+                          <span className="text-[10px] font-bold text-white bg-gradient-to-r from-indigo-500 to-purple-500 px-2 py-1 rounded-full">
                             #{index + 1}
                           </span>
                           {product.productName && (
-                            <span className="text-[10px] text-gray-500 truncate max-w-[200px]">
+                            <span className="text-[10px] text-gray-400 truncate max-w-[200px]">
                               {product.productName}
                               {product.productCategory && ` › ${product.productCategory}`}
                               {product.productColor && ` › ${product.productColor}`}
@@ -709,13 +801,13 @@ const InvoiceCreate = () => {
                         <div className="flex items-center gap-1">
                           <button type="button" onClick={() => duplicateProduct(index)}
                             title="Duplicate product"
-                            className="text-blue-600 hover:text-blue-800 transition duration-200 p-1">
+                            className="text-indigo-500 hover:text-indigo-700 transition-colors p-1.5 hover:bg-indigo-50 rounded-lg">
                             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                             </svg>
                           </button>
                           <button type="button" onClick={() => removeProduct(index)}
-                            className="text-red-600 hover:text-red-800 transition duration-200 p-1">
+                            className="text-red-400 hover:text-red-600 transition-colors p-1.5 hover:bg-red-50 rounded-lg">
                             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                             </svg>
@@ -726,14 +818,12 @@ const InvoiceCreate = () => {
                       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
                         {/* Product Name */}
                         <div className="col-span-2 sm:col-span-1">
-                          <label className="block text-[10px] font-medium text-gray-700 mb-1">
-                            Product Name <span className="text-red-500">*</span>
-                          </label>
+                          <label className="block text-[10px] font-medium text-gray-500 mb-1">Product Name <span className="text-red-500">*</span></label>
                           <select
                             value={product.productName || ''}
                             onChange={(e) => handleProductChange(index, 'productName', e.target.value)}
                             required
-                            className="w-full px-1.5 py-1.5 border border-gray-300 rounded text-xs focus:ring-2 focus:ring-blue-500 focus:border-transparent transition duration-200 text-gray-900"
+                            className="w-full px-2 py-2 border border-gray-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all duration-200 text-gray-900 bg-white shadow-sm"
                           >
                             <option value="">Select</option>
                             {uniqueProductNames.map((name) => (
@@ -744,15 +834,13 @@ const InvoiceCreate = () => {
 
                         {/* Category */}
                         <div className="col-span-2 sm:col-span-1">
-                          <label className="block text-[10px] font-medium text-gray-700 mb-1">
-                            Category <span className="text-red-500">*</span>
-                          </label>
+                          <label className="block text-[10px] font-medium text-gray-500 mb-1">Category <span className="text-red-500">*</span></label>
                           <select
                             value={product.productCategory || ''}
                             onChange={(e) => handleProductChange(index, 'productCategory', e.target.value)}
                             required
                             disabled={!product.productName}
-                            className="w-full px-1.5 py-1.5 border border-gray-300 rounded text-xs focus:ring-2 focus:ring-blue-500 focus:border-transparent transition duration-200 text-gray-900 disabled:bg-gray-100 disabled:cursor-not-allowed"
+                            className="w-full px-2 py-2 border border-gray-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all duration-200 text-gray-900 bg-white shadow-sm disabled:bg-gray-100 disabled:cursor-not-allowed"
                           >
                             <option value="">{product.productName ? 'Select' : '—'}</option>
                             {categories.map((category) => (
@@ -763,15 +851,13 @@ const InvoiceCreate = () => {
 
                         {/* Color */}
                         <div className="col-span-2 sm:col-span-1">
-                          <label className="block text-[10px] font-medium text-gray-700 mb-1">
-                            Color <span className="text-red-500">*</span>
-                          </label>
+                          <label className="block text-[10px] font-medium text-gray-500 mb-1">Color <span className="text-red-500">*</span></label>
                           <select
                             value={product.productColor || ''}
                             onChange={(e) => handleProductChange(index, 'productColor', e.target.value)}
                             required
                             disabled={!product.productCategory}
-                            className="w-full px-1.5 py-1.5 border border-gray-300 rounded text-xs focus:ring-2 focus:ring-blue-500 focus:border-transparent transition duration-200 text-gray-900 disabled:bg-gray-100 disabled:cursor-not-allowed"
+                            className="w-full px-2 py-2 border border-gray-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all duration-200 text-gray-900 bg-white shadow-sm disabled:bg-gray-100 disabled:cursor-not-allowed"
                           >
                             <option value="">{product.productCategory ? 'Select' : '—'}</option>
                             {colorStocks.map((stock) => (
@@ -784,63 +870,62 @@ const InvoiceCreate = () => {
 
                         {/* Sale Price */}
                         <div className="col-span-1">
-                          <label className="block text-[10px] font-medium text-gray-700 mb-1">
-                            Price <span className="text-red-500">*</span>
-                          </label>
+                          <label className="block text-[10px] font-medium text-gray-500 mb-1">Price <span className="text-red-500">*</span></label>
                           <input
                             type="number"
                             value={product.productSalePrice || ''}
                             onChange={(e) => handleProductChange(index, 'productSalePrice', e.target.value)}
                             required
                             min="0"
-                            className="w-full px-1.5 py-1.5 border border-gray-300 rounded text-xs focus:ring-2 focus:ring-blue-500 focus:border-transparent transition duration-200 text-gray-900 placeholder-gray-400"
+                            placeholder="0"
+                            className="w-full px-2 py-2 border border-gray-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all duration-200 text-gray-900 placeholder-gray-300 bg-white shadow-sm"
                           />
                         </div>
 
                         {/* Quantity */}
                         <div className="col-span-1">
-                          <label className="block text-[10px] font-medium text-gray-700 mb-1">
-                            Qty <span className="text-red-500">*</span>
-                          </label>
+                          <label className="block text-[10px] font-medium text-gray-500 mb-1">Qty <span className="text-red-500">*</span></label>
                           <input
                             type="number"
-                            value={product.productQuantity || 1}
+                            value={product.productQuantity || ''}
                             onChange={(e) => handleProductChange(index, 'productQuantity', e.target.value)}
                             required
                             min="1"
-                            className="w-full px-1.5 py-1.5 border border-gray-300 rounded text-xs focus:ring-2 focus:ring-blue-500 focus:border-transparent transition duration-200 text-gray-900 placeholder-gray-400"
+                            placeholder="0"
+                            className="w-full px-2 py-2 border border-gray-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all duration-200 text-gray-900 placeholder-gray-300 bg-white shadow-sm"
                           />
                         </div>
 
                         {/* Total */}
                         <div className="col-span-2 sm:col-span-1">
-                          <label className="block text-[10px] font-medium text-gray-700 mb-1">
-                            Total
-                          </label>
+                          <label className="block text-[10px] font-medium text-gray-500 mb-1">Total</label>
                           <input
                             type="text"
                             value={formatCurrency(product.productTotalAmount || 0)}
                             readOnly
-                            className="w-full px-1.5 py-1.5 bg-gray-100 border border-gray-300 rounded text-gray-700 text-xs font-medium"
+                            className="w-full px-2 py-2 bg-gray-100 border border-gray-200 rounded-lg text-gray-700 text-xs font-semibold"
                           />
                         </div>
                       </div>
 
                       {/* Stock Status Line */}
                       {selectedStock && (
-                        <div className="mt-1.5 flex items-center gap-2 text-[10px]">
-                          <span className={`px-1.5 py-0.5 rounded-full ${
+                        <div className="mt-2 flex items-center gap-2 text-[10px]">
+                          <span className={`px-2 py-0.5 rounded-full font-medium ${
                             selectedStock.productQuantity === 0
                               ? 'bg-red-100 text-red-700'
                               : selectedStock.productQuantity <= 10
-                                ? 'bg-yellow-100 text-yellow-700'
-                                : 'bg-green-100 text-green-700'
+                                ? 'bg-amber-100 text-amber-700'
+                                : 'bg-emerald-100 text-emerald-700'
                           }`}>
                             Stock: {selectedStock.productQuantity}
                           </span>
                           {parseInt(product.productQuantity) > selectedStock.productQuantity && (
-                            <span className="text-red-600 font-medium">
-                              ⚠ Exceeds available stock!
+                            <span className="text-red-600 font-semibold flex items-center gap-1">
+                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                              </svg>
+                              Exceeds available stock!
                             </span>
                           )}
                         </div>
@@ -852,31 +937,31 @@ const InvoiceCreate = () => {
             </div>
 
             {/* Delivery Charges and Grand Total */}
-            <div className="border-t border-gray-200 pt-3">
+            <div className="border-t border-gray-100 pt-4">
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
-                  <label htmlFor="deliveryCharges" className="block text-xs font-medium text-gray-700 mb-1">
+                  <label htmlFor="deliveryCharges" className="block text-[10px] font-medium text-gray-500 mb-1 uppercase tracking-wider">
                     Delivery Charges
                   </label>
                   <input
                     type="number" id="deliveryCharges" name="deliveryCharges"
                     value={formData.deliveryCharges || 0} onChange={handleInputChange}
                     min="0"
-                    className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs focus:ring-2 focus:ring-blue-500 focus:border-transparent transition duration-200 text-gray-900 placeholder-gray-400" />
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all duration-200 text-gray-900 placeholder-gray-300 bg-white shadow-sm" />
                 </div>
                 <div className="flex items-end">
-                  <div className="w-full bg-white rounded border border-gray-200 p-2.5">
-                    <div className="flex justify-between items-center text-xs">
-                      <span className="text-gray-600">Subtotal:</span>
-                      <span className="font-medium text-gray-800">{formatCurrency(productsSubtotal)}</span>
+                  <div className="w-full bg-white rounded-lg border border-gray-100 p-3 shadow-sm">
+                    <div className="flex justify-between items-center text-sm">
+                      <span className="text-gray-500">Subtotal:</span>
+                      <span className="font-semibold text-gray-800">{formatCurrency(productsSubtotal)}</span>
                     </div>
                   </div>
                 </div>
                 <div className="flex items-end">
-                  <div className="w-full bg-gradient-to-r from-blue-50 to-cyan-50 rounded border border-blue-200 p-2.5">
+                  <div className="w-full bg-gradient-to-r from-indigo-50 to-purple-50 rounded-lg border border-indigo-100 p-3 shadow-sm">
                     <div className="flex justify-between items-center">
-                      <span className="text-xs font-medium text-gray-700">Grand Total:</span>
-                      <span className="text-lg font-bold text-blue-600">
+                      <span className="text-xs font-semibold text-gray-600">Grand Total:</span>
+                      <span className="text-xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
                         {formatCurrency(grandTotal)}
                       </span>
                     </div>
@@ -888,13 +973,13 @@ const InvoiceCreate = () => {
             {/* Submit Button */}
             <div className="pt-2">
               <button type="submit" disabled={loading}
-                className={`w-full py-2.5 px-4 rounded text-white font-medium text-sm transition duration-200 ${
+                className={`w-full py-3 px-4 rounded-xl text-white font-semibold text-sm transition-all duration-200 ${
                   loading ? 'bg-gray-400 cursor-not-allowed'
-                    : 'bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2'
+                    : 'bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-500 hover:from-indigo-700 hover:via-purple-700 hover:to-pink-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 shadow-lg hover:shadow-xl'
                 }`}>
                 {loading ? (
                   <span className="flex items-center justify-center">
-                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <svg className="animate-spin -ml-1 mr-2 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                     </svg>
@@ -902,11 +987,11 @@ const InvoiceCreate = () => {
                   </span>
                 ) : (
                   <span className="flex items-center justify-center">
-                    <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                     Create Invoice
-                    <span className="ml-2 text-[10px] opacity-75 hidden sm:inline">(Ctrl+Enter)</span>
+                    <span className="ml-2 text-[10px] opacity-70 hidden sm:inline">(Press Enter)</span>
                   </span>
                 )}
               </button>
@@ -914,6 +999,23 @@ const InvoiceCreate = () => {
           </form>
         </div>
       </div>
+
+      {/* Add animation styles */}
+      <style jsx>{`
+        @keyframes slide-down {
+          from {
+            opacity: 0;
+            transform: translateY(-10px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+        .animate-slide-down {
+          animation: slide-down 0.3s ease-out;
+        }
+      `}</style>
     </div>
   );
 };
