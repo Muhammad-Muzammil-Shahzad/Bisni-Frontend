@@ -1,5 +1,5 @@
-// InvoiceRead.jsx - Displays all invoices with bulk selection for printing (PKT support)
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+// InvoiceRead.jsx - Fixed Specific Date + Infinite Scroll + Bulk Selection (PKT support)
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import axios from 'axios';
 
 const API_BASE_URL = 'https://bisni-ms-backend.onrender.com/api';
@@ -42,25 +42,40 @@ const getPktDateString = (dateString) => {
   return pktDate.toISOString().split('T')[0];
 };
 
-// ✅ Convert PKT date input (YYYY-MM-DD) to UTC ISO string for backend
-// startDate → 00:00:00 PKT = previous day 19:00:00 UTC
-// endDate   → 23:59:59 PKT = same day 18:59:59 UTC
-const convertPktDateToUtc = (dateString, isEndDate = false) => {
-  if (!dateString) return '';
-  const [year, month, day] = dateString.split('-').map(Number);
-
-  if (isEndDate) {
-    const utcDate = new Date(Date.UTC(year, month - 1, day, 18, 59, 59, 999));
-    return utcDate.toISOString();
-  } else {
-    const utcDate = new Date(Date.UTC(year, month - 1, day - 1, 19, 0, 0, 0));
-    return utcDate.toISOString();
-  }
+// ✅ Check if a UTC date matches a specific PKT date (YYYY-MM-DD)
+const isSamePktDate = (utcDateString, pktDateString) => {
+  if (!utcDateString || !pktDateString) return false;
+  return getPktDateString(utcDateString) === pktDateString;
 };
 
+// ✅ Check if a UTC date is within a PKT date range (start/end YYYY-MM-DD)
+const isWithinPktRange = (utcDateString, startPkt, endPkt) => {
+  if (!utcDateString) return false;
+  const d = new Date(utcDateString).getTime();
+
+  if (startPkt) {
+    const [sy, sm, sd] = startPkt.split('-').map(Number);
+    const startUtc = Date.UTC(sy, sm - 1, sd - 1, 19, 0, 0, 0); // 00:00 PKT
+    if (d < startUtc) return false;
+  }
+
+  if (endPkt) {
+    const [ey, em, ed] = endPkt.split('-').map(Number);
+    const endUtc = Date.UTC(ey, em - 1, ed, 18, 59, 59, 999); // 23:59:59.999 PKT
+    if (d > endUtc) return false;
+  }
+
+  return true;
+};
+
+const PAGE_SIZE = 10; // ✅ Load 10 at a time
+
 const InvoiceRead = () => {
-  const [invoices, setInvoices] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [allFilteredInvoices, setAllFilteredInvoices] = useState([]); // All matching invoices
+  const [invoices, setInvoices] = useState([]);                        // Visible (loaded) invoices
+  const [loading, setLoading] = useState(true);                        // Initial load
+  const [loadingMore, setLoadingMore] = useState(false);               // Loading next batch
+  const [hasMore, setHasMore] = useState(true);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
   const [selectedInvoice, setSelectedInvoice] = useState(null);
@@ -82,6 +97,10 @@ const InvoiceRead = () => {
     employeeName: '',
   });
 
+  // ✅ Infinite scroll refs
+  const sentinelRef = useRef(null);
+  const pageRef = useRef(0);
+
   useEffect(() => {
     fetchInvoices();
     fetchEmployees();
@@ -96,15 +115,18 @@ const InvoiceRead = () => {
     }
   };
 
+  // ✅ Fetch invoices — sara data ek baar, phir client-side PKT filter + pagination
   const fetchInvoices = async (filterParams = {}) => {
     try {
       setLoading(true);
       setError(null);
+      pageRef.current = 0;
 
       const params = new URLSearchParams();
 
+      // ✅ Sirf non-date filters backend ko bhejo
       Object.keys(filterParams).forEach(key => {
-        if (filterParams[key]) {
+        if (filterParams[key] && key !== 'date' && key !== 'startDate' && key !== 'endDate') {
           params.append(key, filterParams[key]);
         }
       });
@@ -113,16 +135,30 @@ const InvoiceRead = () => {
       const url = queryString ? `${API_BASE_URL}/invoice?${queryString}` : `${API_BASE_URL}/invoice`;
 
       const response = await axios.get(url);
-      const data = response.data.data || response.data || [];
-      setInvoices(data);
+      let data = response.data.data || response.data || [];
+
+      // ✅ Client-side PKT date filters
+      if (filterParams.date) {
+        data = data.filter(inv => isSamePktDate(inv.createdAt, filterParams.date));
+      }
+      if (filterParams.startDate || filterParams.endDate) {
+        data = data.filter(inv =>
+          isWithinPktRange(inv.createdAt, filterParams.startDate, filterParams.endDate)
+        );
+      }
+
+      setAllFilteredInvoices(data);
+
+      // ✅ Sirf pehle 10 visible karo
+      setInvoices(data.slice(0, PAGE_SIZE));
+      setHasMore(data.length > PAGE_SIZE);
 
       // Clear selection on new fetch
       setSelectedIds(new Set());
       setSelectAll(false);
 
-      if (response.data.count !== undefined) {
-        setSuccess(`${response.data.count} invoice(s) loaded`);
-      }
+      setSuccess(`${data.length} invoice(s) loaded`);
+      setTimeout(() => setSuccess(null), 3000);
 
     } catch (error) {
       console.error('Error fetching invoices:', error);
@@ -132,37 +168,49 @@ const InvoiceRead = () => {
     }
   };
 
+  // ✅ Load next 10 invoices (used by infinite scroll)
+  const loadMore = useCallback(() => {
+    if (loadingMore || !hasMore) return;
+
+    setLoadingMore(true);
+    const nextPage = pageRef.current + 1;
+    const startIdx = nextPage * PAGE_SIZE;
+    const endIdx = startIdx + PAGE_SIZE;
+
+    setTimeout(() => {
+      const nextBatch = allFilteredInvoices.slice(startIdx, endIdx);
+      setInvoices(prev => [...prev, ...nextBatch]);
+      pageRef.current = nextPage;
+      setHasMore(endIdx < allFilteredInvoices.length);
+      setLoadingMore(false);
+    }, 250);
+  }, [loadingMore, hasMore, allFilteredInvoices]);
+
+  // ✅ IntersectionObserver for infinite scroll
+  useEffect(() => {
+    if (!sentinelRef.current) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasMore && !loadingMore && !loading) {
+          loadMore();
+        }
+      },
+      { rootMargin: '200px' }
+    );
+
+    observer.observe(sentinelRef.current);
+    return () => observer.disconnect();
+  }, [loadMore, hasMore, loadingMore, loading]);
+
   const handleFilterChange = (e) => {
     const { name, value } = e.target;
-    setFilters(prev => ({
-      ...prev,
-      [name]: value
-    }));
+    setFilters(prev => ({ ...prev, [name]: value }));
   };
 
-  // ✅ FIXED: Convert PKT dates to UTC before sending to backend
+  // ✅ Apply filters — dates client-side PKT logic se handle honge
   const applyFilters = () => {
-    const processedFilters = { ...filters };
-
-    // Convert date filters from PKT to UTC
-    if (filters.startDate) {
-      processedFilters.startDate = convertPktDateToUtc(filters.startDate, false);
-    }
-    if (filters.endDate) {
-      processedFilters.endDate = convertPktDateToUtc(filters.endDate, true);
-    }
-    if (filters.date) {
-      processedFilters.dateFrom = convertPktDateToUtc(filters.date, false);
-      processedFilters.dateTo = convertPktDateToUtc(filters.date, true);
-      delete processedFilters.date;
-    }
-
-    const hasFilters = Object.values(processedFilters).some(v => v);
-    if (hasFilters) {
-      fetchInvoices(processedFilters);
-    } else {
-      fetchInvoices();
-    }
+    fetchInvoices(filters);
   };
 
   const clearFilters = () => {
@@ -180,6 +228,7 @@ const InvoiceRead = () => {
   };
 
   // ===== SELECTION HANDLERS =====
+  // Note: Select All → SELECT ALL filtered invoices (not just visible)
   const toggleSelect = useCallback((id) => {
     setSelectedIds(prev => {
       const newSet = new Set(prev);
@@ -197,35 +246,36 @@ const InvoiceRead = () => {
       setSelectedIds(new Set());
       setSelectAll(false);
     } else {
-      const allIds = invoices.map(inv => inv._id);
+      // ✅ Select ALL filtered, not just visible
+      const allIds = allFilteredInvoices.map(inv => inv._id);
       setSelectedIds(new Set(allIds));
       setSelectAll(true);
     }
-  }, [selectAll, invoices]);
+  }, [selectAll, allFilteredInvoices]);
 
-  // Sync selectAll state with selectedIds
+  // Sync selectAll state
   useEffect(() => {
-    if (invoices.length === 0) {
+    if (allFilteredInvoices.length === 0) {
       setSelectAll(false);
       return;
     }
-    const allSelected = invoices.every(inv => selectedIds.has(inv._id));
+    const allSelected = allFilteredInvoices.every(inv => selectedIds.has(inv._id));
     setSelectAll(allSelected);
-  }, [selectedIds, invoices]);
+  }, [selectedIds, allFilteredInvoices]);
 
   const clearSelection = useCallback(() => {
     setSelectedIds(new Set());
     setSelectAll(false);
   }, []);
 
-  // Get selected invoice objects
+  // Get selected invoice objects (from ALL filtered, not just visible)
   const selectedInvoices = useMemo(() => {
-    return invoices.filter(inv => selectedIds.has(inv._id));
-  }, [invoices, selectedIds]);
+    return allFilteredInvoices.filter(inv => selectedIds.has(inv._id));
+  }, [allFilteredInvoices, selectedIds]);
 
   // Quick select: by employee
   const selectByEmployee = useCallback((employeeName) => {
-    const ids = invoices
+    const ids = allFilteredInvoices
       .filter(inv => inv.employeeName === employeeName)
       .map(inv => inv._id);
     setSelectedIds(prev => {
@@ -233,22 +283,19 @@ const InvoiceRead = () => {
       ids.forEach(id => newSet.add(id));
       return newSet;
     });
-  }, [invoices]);
+  }, [allFilteredInvoices]);
 
-  // ✅ FIXED: Quick select by date (PKT based)
+  // Quick select: by date (PKT based)
   const selectByDate = useCallback((dateStr) => {
-    const ids = invoices
-      .filter(inv => {
-        if (!inv.createdAt) return false;
-        return getPktDateString(inv.createdAt) === dateStr;
-      })
+    const ids = allFilteredInvoices
+      .filter(inv => isSamePktDate(inv.createdAt, dateStr))
       .map(inv => inv._id);
     setSelectedIds(prev => {
       const newSet = new Set(prev);
       ids.forEach(id => newSet.add(id));
       return newSet;
     });
-  }, [invoices]);
+  }, [allFilteredInvoices]);
 
   const handleViewInvoice = (invoice) => {
     const employee = employees.find(emp =>
@@ -263,7 +310,6 @@ const InvoiceRead = () => {
     });
   };
 
-  // Calculate employee commission
   const calculateEmployeeCommission = (products, employeeCommission) => {
     if (!employeeCommission || employeeCommission.length === 0) return 0;
     let totalCommission = 0;
@@ -276,7 +322,6 @@ const InvoiceRead = () => {
     return totalCommission;
   };
 
-  // Calculate commission for an invoice
   const calculateInvoiceCommission = (invoice) => {
     const employee = employees.find(emp =>
       emp.employeeName === invoice.employeeName &&
@@ -286,7 +331,7 @@ const InvoiceRead = () => {
     return calculateEmployeeCommission(invoice.products, employee?.employeeCommission || []);
   };
 
-  // ===== SHARED: Build single invoice HTML (used for single & bulk print) =====
+  // ===== BUILD INVOICE HTML =====
   const buildInvoiceHTML = (inv) => {
     const employee = employees.find(emp =>
       emp.employeeName === inv.employeeName &&
@@ -296,17 +341,12 @@ const InvoiceRead = () => {
     const commission = calculateEmployeeCommission(inv.products, employee?.employeeCommission || []);
 
     const formatCur = (amount) => (amount || 0).toFixed(2);
-    // ✅ FIXED: Use Pakistan Standard Time in print
     const formatDt = (dateString) => {
       if (!dateString) return 'N/A';
       return new Date(dateString).toLocaleString('en-PK', {
         timeZone: 'Asia/Karachi',
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: true
+        year: 'numeric', month: 'short', day: 'numeric',
+        hour: '2-digit', minute: '2-digit', hour12: true
       });
     };
 
@@ -384,31 +424,31 @@ const InvoiceRead = () => {
 
         <table style="width:100%;border-collapse:collapse;font-size:18px;font-family:Arial, sans-serif;margin-top:10px;">
           <tr>
-            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px; font-family: sans-serif;">To</td>
-            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px; font-family: sans-serif;">${inv.customerName || 'N/A'}</td>
+            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">To</td>
+            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">${inv.customerName || 'N/A'}</td>
           </tr>
           <tr>
-            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px; font-family: sans-serif;">Contact</td>
-            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px; font-family: sans-serif;">${inv.customerMobileNumber1 || 'N/A'} &nbsp;&nbsp;||&nbsp;&nbsp; ${inv.customerMobileNumber2 || 'N/A'}</td>
+            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">Contact</td>
+            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">${inv.customerMobileNumber1 || 'N/A'} &nbsp;&nbsp;||&nbsp;&nbsp; ${inv.customerMobileNumber2 || 'N/A'}</td>
           </tr>
           <tr>
-            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px; font-family: sans-serif;">Address</td>
-            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px; font-family: sans-serif;">${inv.customerAddress || 'N/A'}</td>
+            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">Address</td>
+            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">${inv.customerAddress || 'N/A'}</td>
           </tr>
         </table>
 
         <table style="width:100%;border-collapse:collapse;font-size:18px;font-family:Arial, sans-serif;margin-top:10px;">
           <tr>
-            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px; font-family: sans-serif;">From</td>
-            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px; font-family: sans-serif;">${inv.employeeName || 'N/A'}</td>
+            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">From</td>
+            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">${inv.employeeName || 'N/A'}</td>
           </tr>
           <tr>
-            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px; font-family: sans-serif;">Contact</td>
-            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px; font-family: sans-serif;">${inv.employeeMobileNumber || 'N/A'}</td>
+            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">Contact</td>
+            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">${inv.employeeMobileNumber || 'N/A'}</td>
           </tr>
           <tr>
-            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px; font-family: sans-serif;">Address</td>
-            <td style="border:2px solid #000; padding:4px 6px; font-weight:bold; font-size: 22px; font-family: sans-serif;">${inv.employeeAddress || 'N/A'}</td>
+            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">Address</td>
+            <td style="border:2px solid #000; padding:4px 6px; font-weight:bold; font-size: 22px;">${inv.employeeAddress || 'N/A'}</td>
           </tr>
         </table>
 
@@ -419,7 +459,6 @@ const InvoiceRead = () => {
     `;
   };
 
-  // Shared CSS for print pages
   const printCSS = `
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 25px; color: #1a1a2e; max-width: 800px; margin: 0 auto; }
@@ -447,9 +486,9 @@ const InvoiceRead = () => {
     @page { size: A4; margin: 8mm; }
   `;
 
-  // Print individual invoice
   const handlePrint = (invoiceId) => {
-    const inv = invoices.find(i => i._id === invoiceId || i.invoiceId === invoiceId);
+    const inv = allFilteredInvoices.find(i => i._id === invoiceId || i.invoiceId === invoiceId)
+             || invoices.find(i => i._id === invoiceId || i.invoiceId === invoiceId);
     if (!inv) {
       setError('Invoice not found');
       return;
@@ -476,7 +515,6 @@ const InvoiceRead = () => {
     printWindow.document.close();
   };
 
-  // Print only selected invoices
   const handlePrintSelected = () => {
     if (selectedInvoices.length === 0) {
       setError('Please select at least one invoice to print');
@@ -506,7 +544,6 @@ const InvoiceRead = () => {
     printWindow.document.close();
   };
 
-  // Print selected invoices as LIST (summary)
   const handlePrintSelectedList = () => {
     if (selectedInvoices.length === 0) {
       setError('Please select at least one invoice to print');
@@ -514,17 +551,12 @@ const InvoiceRead = () => {
     }
 
     const formatCur = (amount) => (amount || 0).toFixed(2);
-    // ✅ FIXED: PKT in print
     const formatDt = (dateString) => {
       if (!dateString) return 'N/A';
       return new Date(dateString).toLocaleString('en-PK', {
         timeZone: 'Asia/Karachi',
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: true
+        year: 'numeric', month: 'short', day: 'numeric',
+        hour: '2-digit', minute: '2-digit', hour12: true
       });
     };
 
@@ -579,9 +611,7 @@ const InvoiceRead = () => {
               <th style="text-align:right;">Total Amount</th>
             </tr>
           </thead>
-          <tbody>
-            ${invoiceRows}
-          </tbody>
+          <tbody>${invoiceRows}</tbody>
         </table>
       </div>
 
@@ -614,32 +644,27 @@ const InvoiceRead = () => {
     printWindow.document.close();
   };
 
-  // Print filtered invoices list
+  // Print ALL filtered (not just visible)
   const handlePrintFilteredList = () => {
-    if (invoices.length === 0) {
+    if (allFilteredInvoices.length === 0) {
       setError('No invoices to print');
       return;
     }
 
     const formatCur = (amount) => (amount || 0).toFixed(2);
-    // ✅ FIXED: PKT in print
     const formatDt = (dateString) => {
       if (!dateString) return 'N/A';
       return new Date(dateString).toLocaleString('en-PK', {
         timeZone: 'Asia/Karachi',
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: true
+        year: 'numeric', month: 'short', day: 'numeric',
+        hour: '2-digit', minute: '2-digit', hour12: true
       });
     };
 
     let totalCommission = 0;
     let totalAmount = 0;
 
-    const invoiceRows = invoices.map((inv, i) => {
+    const invoiceRows = allFilteredInvoices.map((inv, i) => {
       const commission = calculateInvoiceCommission(inv);
       totalCommission += commission;
       totalAmount += (inv.grandTotalAmount || 0);
@@ -668,10 +693,10 @@ const InvoiceRead = () => {
     <body>
       <div class="header">
         <h1>📋 INVOICES REPORT</h1>
-        <p>${filterInfo} | Total Invoices: ${invoices.length}</p>
+        <p>${filterInfo} | Total Invoices: ${allFilteredInvoices.length}</p>
         <div class="dates">
           <span>Generated: ${formatDt(new Date().toISOString())}</span>
-          <span>Total Invoices: ${invoices.length}</span>
+          <span>Total Invoices: ${allFilteredInvoices.length}</span>
         </div>
       </div>
 
@@ -688,9 +713,7 @@ const InvoiceRead = () => {
               <th style="text-align:right;">Total Amount</th>
             </tr>
           </thead>
-          <tbody>
-            ${invoiceRows}
-          </tbody>
+          <tbody>${invoiceRows}</tbody>
         </table>
       </div>
 
@@ -723,42 +746,11 @@ const InvoiceRead = () => {
     printWindow.document.close();
   };
 
-  // Print selected full invoices (each invoice on separate page)
-  const handlePrintSelectedFull = () => {
-    if (selectedInvoices.length === 0) {
-      setError('Please select at least one invoice to print');
-      return;
-    }
-
-    const allPages = selectedInvoices.map(inv => buildInvoiceHTML(inv)).join('');
-
-    const html = `<!DOCTYPE html>
-    <html>
-    <head>
-      <title>Selected Invoices (${selectedInvoices.length})</title>
-      <style>${printCSS}</style>
-    </head>
-    <body>
-      ${allPages}
-      <script>window.onload=function(){window.print();}<\/script>
-    </body>
-    </html>`;
-
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) {
-      setError('Please allow popups to print the invoices');
-      return;
-    }
-    printWindow.document.write(html);
-    printWindow.document.close();
-  };
-
   const clearMessages = () => {
     setError(null);
     setSuccess(null);
   };
 
-  // ✅ FIXED: Use Pakistan Standard Time
   const formatDate = (dateString) => {
     return formatPakistanTimeShort(dateString);
   };
@@ -773,7 +765,7 @@ const InvoiceRead = () => {
     return products.reduce((sum, product) => sum + (product.productQuantity || 0), 0);
   };
 
-  // Selected stats
+  // Selected stats (from all selected invoices, not just visible)
   const selectedStats = useMemo(() => {
     let totalAmount = 0;
     let totalCommission = 0;
@@ -784,28 +776,28 @@ const InvoiceRead = () => {
     return { totalAmount, totalCommission };
   }, [selectedInvoices, employees]);
 
-  // Unique employees in current list for quick select
+  // Unique employees in current filtered list
   const uniqueEmployeesInList = useMemo(() => {
     const map = {};
-    invoices.forEach(inv => {
+    allFilteredInvoices.forEach(inv => {
       if (!inv.employeeName) return;
       if (!map[inv.employeeName]) map[inv.employeeName] = 0;
       map[inv.employeeName]++;
     });
     return Object.entries(map).sort((a, b) => b[1] - a[1]);
-  }, [invoices]);
+  }, [allFilteredInvoices]);
 
-  // ✅ FIXED: Unique dates in current list - now PKT based
+  // Unique dates in current filtered list (PKT based)
   const uniqueDatesInList = useMemo(() => {
     const map = {};
-    invoices.forEach(inv => {
+    allFilteredInvoices.forEach(inv => {
       if (!inv.createdAt) return;
       const dateStr = getPktDateString(inv.createdAt);
       if (!map[dateStr]) map[dateStr] = 0;
       map[dateStr]++;
     });
     return Object.entries(map).sort((a, b) => b[0].localeCompare(a[0]));
-  }, [invoices]);
+  }, [allFilteredInvoices]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 py-3 sm:py-4 md:py-5 px-2 sm:px-3 md:px-4 lg:px-6">
@@ -909,8 +901,8 @@ const InvoiceRead = () => {
           </div>
         </div>
 
-        {/* ===== BULK SELECTION PANEL ===== */}
-        {invoices.length > 0 && (
+        {/* BULK SELECTION PANEL */}
+        {allFilteredInvoices.length > 0 && (
           <div className="bg-white rounded-lg shadow-md overflow-hidden mb-3 sm:mb-4 border-2 border-purple-200">
             <div className="bg-gradient-to-r from-purple-600 to-pink-600 px-3 sm:px-4 py-2 sm:py-2.5 flex justify-between items-center">
               <h2 className="text-xs sm:text-sm font-semibold text-white flex items-center">
@@ -927,7 +919,6 @@ const InvoiceRead = () => {
             </div>
 
             <div className="p-2 sm:p-3 space-y-3">
-              {/* Quick select buttons */}
               <div className="flex flex-wrap gap-2">
                 <button
                   onClick={handleSelectAll}
@@ -937,7 +928,7 @@ const InvoiceRead = () => {
                       : 'bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200'
                   }`}
                 >
-                  {selectAll ? '☑ Deselect All' : '☐ Select All (' + invoices.length + ')'}
+                  {selectAll ? '☑ Deselect All' : '☐ Select All (' + allFilteredInvoices.length + ')'}
                 </button>
                 <button
                   onClick={clearSelection}
@@ -948,7 +939,6 @@ const InvoiceRead = () => {
                 </button>
               </div>
 
-              {/* Quick select by employee */}
               {uniqueEmployeesInList.length > 1 && (
                 <div>
                   <label className="block text-[10px] sm:text-xs font-medium text-gray-500 mb-1">
@@ -969,7 +959,6 @@ const InvoiceRead = () => {
                 </div>
               )}
 
-              {/* Quick select by date */}
               {uniqueDatesInList.length > 1 && (
                 <div>
                   <label className="block text-[10px] sm:text-xs font-medium text-gray-500 mb-1">
@@ -990,7 +979,6 @@ const InvoiceRead = () => {
                 </div>
               )}
 
-              {/* Selected stats + print actions */}
               {selectedIds.size > 0 && (
                 <div className="bg-purple-50 border border-purple-200 rounded-md p-2 sm:p-3 space-y-2">
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
@@ -1036,7 +1024,10 @@ const InvoiceRead = () => {
         <div className="bg-white rounded-lg shadow-md overflow-hidden">
           <div className="bg-gradient-to-r from-blue-600 to-cyan-600 px-3 sm:px-4 py-2 sm:py-2.5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
             <h2 className="text-xs sm:text-sm font-semibold text-white">
-              Invoice List ({invoices.length})
+              Invoice List
+              <span className="ml-2 text-[10px] bg-white/20 text-white px-1.5 py-0.5 rounded-full">
+                {invoices.length} of {allFilteredInvoices.length}
+              </span>
               {selectedIds.size > 0 && (
                 <span className="ml-2 text-[10px] bg-purple-500 text-white px-1.5 py-0.5 rounded-full">
                   {selectedIds.size} selected
@@ -1046,10 +1037,10 @@ const InvoiceRead = () => {
             <div className="flex items-center gap-2 w-full sm:w-auto">
               <button onClick={handlePrintFilteredList}
                 className="px-2.5 py-1 bg-white text-purple-600 rounded-md hover:bg-gray-100 text-xs font-medium w-full sm:w-auto"
-                title="Print filtered invoices list">
+                title="Print all filtered invoices">
                 🖨️ Print List
               </button>
-              <button onClick={() => fetchInvoices()}
+              <button onClick={() => fetchInvoices(filters)}
                 className="px-2.5 py-1 bg-white text-blue-600 rounded-md hover:bg-gray-100 text-xs font-medium w-full sm:w-auto">
                 🔄 Refresh
               </button>
@@ -1060,7 +1051,7 @@ const InvoiceRead = () => {
             <div className="flex justify-center items-center py-12">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
             </div>
-          ) : invoices.length === 0 ? (
+          ) : allFilteredInvoices.length === 0 ? (
             <div className="text-center py-12 px-4">
               <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -1209,6 +1200,22 @@ const InvoiceRead = () => {
                   ))}
                 </tbody>
               </table>
+
+              {/* ✅ Infinite Scroll Sentinel & Loaders */}
+              <div ref={sentinelRef} className="h-2"></div>
+
+              {loadingMore && (
+                <div className="flex justify-center items-center py-4 bg-gray-50 border-t">
+                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600 mr-2"></div>
+                  <span className="text-xs text-gray-600">Loading more...</span>
+                </div>
+              )}
+
+              {!hasMore && invoices.length > 0 && (
+                <div className="text-center py-4 bg-gray-50 border-t">
+                  <span className="text-xs text-gray-500">✅ All {allFilteredInvoices.length} invoices loaded</span>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -1266,7 +1273,6 @@ const InvoiceRead = () => {
                 <div>
                   <h5 className="text-xs font-semibold text-gray-900 mb-1.5 sm:mb-2">Products ({selectedInvoice.products.length})</h5>
                   <div className="overflow-x-auto">
-                    {/* Mobile Product Cards */}
                     <div className="block md:hidden space-y-2">
                       {selectedInvoice.products.map((product, index) => (
                         <div key={index} className="border border-gray-200 rounded-md p-2 bg-gray-50">
@@ -1284,7 +1290,6 @@ const InvoiceRead = () => {
                       ))}
                     </div>
 
-                    {/* Desktop Product Table */}
                     <table className="min-w-full divide-y divide-gray-200 border border-gray-200 rounded-md hidden md:table">
                       <thead className="bg-gray-50">
                         <tr>
@@ -1338,7 +1343,6 @@ const InvoiceRead = () => {
                       </tfoot>
                     </table>
 
-                    {/* Mobile Totals */}
                     <div className="block md:hidden mt-3 space-y-2 text-xs">
                       <div className="flex justify-between">
                         <span className="font-medium">Subtotal:</span>
