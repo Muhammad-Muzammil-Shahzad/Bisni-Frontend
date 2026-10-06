@@ -98,11 +98,22 @@ const InvoiceRead = () => {
     deliveredThrough: '',
   });
 
+  // ✅ FIX #1: Keep latest filters in a ref so fetchInvoices never uses stale values
+  const filtersRef = useRef(filters);
+  useEffect(() => {
+    filtersRef.current = filters;
+  }, [filters]);
+
   // ✅ Infinite scroll refs
   const sentinelRef = useRef(null);
   const pageRef = useRef(0);
 
+  // ✅ FIX #2: Use a ref to prevent double-fetching on mount (React StrictMode)
+  const didInitRef = useRef(false);
+
   useEffect(() => {
+    if (didInitRef.current) return;
+    didInitRef.current = true;
     fetchInvoices();
     fetchEmployees();
   }, []);
@@ -116,19 +127,21 @@ const InvoiceRead = () => {
     }
   };
 
-  // ✅ Fetch invoices — sara data ek baar, phir client-side PKT filter + pagination
-  const fetchInvoices = async (filterParams = {}) => {
+  // ✅ FIX #3: Use filtersRef fallback so callers without args still get latest filters
+  const fetchInvoices = useCallback(async (filterParams) => {
     try {
       setLoading(true);
       setError(null);
       pageRef.current = 0;
 
+      const activeFilters = filterParams !== undefined ? filterParams : filtersRef.current;
+
       const params = new URLSearchParams();
 
       // ✅ Sirf non-date filters backend ko bhejo
-      Object.keys(filterParams).forEach(key => {
-        if (filterParams[key] && key !== 'date' && key !== 'startDate' && key !== 'endDate') {
-          params.append(key, filterParams[key]);
+      Object.keys(activeFilters).forEach(key => {
+        if (activeFilters[key] && key !== 'date' && key !== 'startDate' && key !== 'endDate') {
+          params.append(key, activeFilters[key]);
         }
       });
 
@@ -139,12 +152,12 @@ const InvoiceRead = () => {
       let data = response.data.data || response.data || [];
 
       // ✅ Client-side PKT date filters
-      if (filterParams.date) {
-        data = data.filter(inv => isSamePktDate(inv.createdAt, filterParams.date));
+      if (activeFilters.date) {
+        data = data.filter(inv => isSamePktDate(inv.createdAt, activeFilters.date));
       }
-      if (filterParams.startDate || filterParams.endDate) {
+      if (activeFilters.startDate || activeFilters.endDate) {
         data = data.filter(inv =>
-          isWithinPktRange(inv.createdAt, filterParams.startDate, filterParams.endDate)
+          isWithinPktRange(inv.createdAt, activeFilters.startDate, activeFilters.endDate)
         );
       }
 
@@ -167,7 +180,7 @@ const InvoiceRead = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   // ✅ Load next 10 invoices (used by infinite scroll)
   const loadMore = useCallback(() => {
@@ -215,7 +228,7 @@ const InvoiceRead = () => {
   };
 
   const clearFilters = () => {
-    setFilters({
+    const emptyFilters = {
       employeeCategory: '',
       customerName: '',
       customerMobileNumber: '',
@@ -225,12 +238,12 @@ const InvoiceRead = () => {
       endDate: '',
       employeeName: '',
       deliveredThrough: ''
-    });
-    fetchInvoices();
+    };
+    setFilters(emptyFilters);
+    fetchInvoices(emptyFilters);
   };
 
   // ===== SELECTION HANDLERS =====
-  // Note: Select All → SELECT ALL filtered invoices (not just visible)
   const toggleSelect = useCallback((id) => {
     setSelectedIds(prev => {
       const newSet = new Set(prev);
@@ -248,14 +261,12 @@ const InvoiceRead = () => {
       setSelectedIds(new Set());
       setSelectAll(false);
     } else {
-      // ✅ Select ALL filtered, not just visible
       const allIds = allFilteredInvoices.map(inv => inv._id);
       setSelectedIds(new Set(allIds));
       setSelectAll(true);
     }
   }, [selectAll, allFilteredInvoices]);
 
-  // Sync selectAll state
   useEffect(() => {
     if (allFilteredInvoices.length === 0) {
       setSelectAll(false);
@@ -270,12 +281,10 @@ const InvoiceRead = () => {
     setSelectAll(false);
   }, []);
 
-  // Get selected invoice objects (from ALL filtered, not just visible)
   const selectedInvoices = useMemo(() => {
     return allFilteredInvoices.filter(inv => selectedIds.has(inv._id));
   }, [allFilteredInvoices, selectedIds]);
 
-  // Quick select: by employee
   const selectByEmployee = useCallback((employeeName) => {
     const ids = allFilteredInvoices
       .filter(inv => inv.employeeName === employeeName)
@@ -287,7 +296,6 @@ const InvoiceRead = () => {
     });
   }, [allFilteredInvoices]);
 
-  // Quick select: by date (PKT based)
   const selectByDate = useCallback((dateStr) => {
     const ids = allFilteredInvoices
       .filter(inv => isSamePktDate(inv.createdAt, dateStr))
@@ -653,7 +661,6 @@ const InvoiceRead = () => {
     printWindow.document.close();
   };
 
-  // Print ALL filtered (not just visible)
   const handlePrintFilteredList = () => {
     if (allFilteredInvoices.length === 0) {
       setError('No invoices to print');
@@ -776,7 +783,6 @@ const InvoiceRead = () => {
     return products.reduce((sum, product) => sum + (product.productQuantity || 0), 0);
   };
 
-  // Selected stats (from all selected invoices, not just visible)
   const selectedStats = useMemo(() => {
     let totalAmount = 0;
     let totalCommission = 0;
@@ -787,7 +793,6 @@ const InvoiceRead = () => {
     return { totalAmount, totalCommission };
   }, [selectedInvoices, employees]);
 
-  // Unique employees in current filtered list
   const uniqueEmployeesInList = useMemo(() => {
     const map = {};
     allFilteredInvoices.forEach(inv => {
@@ -798,7 +803,6 @@ const InvoiceRead = () => {
     return Object.entries(map).sort((a, b) => b[1] - a[1]);
   }, [allFilteredInvoices]);
 
-  // Unique dates in current filtered list (PKT based)
   const uniqueDatesInList = useMemo(() => {
     const map = {};
     allFilteredInvoices.forEach(inv => {
