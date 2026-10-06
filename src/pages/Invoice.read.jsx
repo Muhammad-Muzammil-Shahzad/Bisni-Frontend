@@ -440,7 +440,7 @@ const InvoiceRead = () => {
             </tr>
           </table>
           <div style="position:absolute; right:-70px; top:0; height:100%; display:flex; align-items:center; justify-content:center;">
-            <span style="writing-mode:vertical-rl; transform:rotate(180deg); font-size:20px; font-weight:bold; font-family:Arial, sans-serif; white-space:nowrap; position:relative; right:30px;">
+            <span style="writing-mode:vertical-rl; transform:rotate(180deg); font-size:20px; font-weight:bold; font-family:Arial, sans-serif; white-space:nowrap; position:relative; right:60px;">
   ${inv.deliveredThrough || 'N/A'}
 </span>
           </div>
