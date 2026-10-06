@@ -424,27 +424,27 @@ const InvoiceRead = () => {
           </table>
         </div>
 
-        <table style="width:100%;border-collapse:collapse;font-size:18px;font-family:Arial, sans-serif;margin-top:10px;">
-          <tr>
-            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">To</td>
-            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">${inv.customerName || 'N/A'}</td>
-          </tr>
-          <tr>
-            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">Contact</td>
-            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">${inv.customerMobileNumber1 || 'N/A'} &nbsp;&nbsp;||&nbsp;&nbsp; ${inv.customerMobileNumber2 || 'N/A'}</td>
-          </tr>
-          <tr>
-            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">Address</td>
-            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px; position:relative;">
-              <div style="display:flex; justify-content:space-between; align-items:flex-start;">
-                <span style="flex:1;">${inv.customerAddress || 'N/A'}</span>
-                <span style="border-left:2px solid #000; padding-left:8px; margin-left:8px; font-size:16px; white-space:nowrap;">
-                  D/T: ${inv.deliveredThrough || 'N/A'}
-                </span>
-              </div>
-            </td>
-          </tr>
-        </table>
+        <div style="position:relative;margin-top:10px;">
+          <table style="width:100%;border-collapse:collapse;font-size:18px;font-family:Arial, sans-serif;margin-top:10px;">
+            <tr>
+              <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">To</td>
+              <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">${inv.customerName || 'N/A'}</td>
+            </tr>
+            <tr>
+              <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">Contact</td>
+              <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">${inv.customerMobileNumber1 || 'N/A'} &nbsp;&nbsp;||&nbsp;&nbsp; ${inv.customerMobileNumber2 || 'N/A'}</td>
+            </tr>
+            <tr>
+              <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">Address</td>
+              <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">${inv.customerAddress || 'N/A'}</td>
+            </tr>
+          </table>
+          <div style="position:absolute; right:-70px; top:0; height:100%; display:flex; align-items:center; justify-content:center;">
+            <span style="writing-mode:vertical-rl; transform:rotate(180deg); font-size:20px; font-weight:bold; font-family:Arial, sans-serif; white-space:nowrap;">
+              ${inv.deliveredThrough || 'N/A'}
+            </span>
+          </div>
+        </div>
 
         <table style="width:100%;border-collapse:collapse;font-size:18px;font-family:Arial, sans-serif;margin-top:10px;">
           <tr>
