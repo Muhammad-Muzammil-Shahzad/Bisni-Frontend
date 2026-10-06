@@ -32,6 +32,7 @@ const InvoiceCreate = () => {
     customerMobileNumber1: '',
     customerMobileNumber2: '',
     customerAddress: '',
+    deliveredThrough: '',
     products: [],
     deliveryCharges: 0
   });
@@ -288,6 +289,11 @@ const InvoiceCreate = () => {
         setLoading(false);
         return;
       }
+      if (!formData.deliveredThrough) {
+        setError('Please select a delivery method (Delivered Through)');
+        setLoading(false);
+        return;
+      }
       if (formData.products.length === 0) {
         setError('Please add at least one product to the invoice');
         setLoading(false);
@@ -326,6 +332,7 @@ const InvoiceCreate = () => {
         customerMobileNumber1: formData.customerMobileNumber1,
         customerMobileNumber2: formData.customerMobileNumber2 || '',
         customerAddress: formData.customerAddress,
+        deliveredThrough: formData.deliveredThrough,
         products: formattedProducts,
         deliveryCharges: parseFloat(formData.deliveryCharges) || 0,
         grandTotalAmount: grandTotal
@@ -351,6 +358,7 @@ const InvoiceCreate = () => {
         customerMobileNumber1: '',
         customerMobileNumber2: '',
         customerAddress: '',
+        deliveredThrough: '',
         products: [],
         deliveryCharges: 0
       }));
@@ -383,6 +391,7 @@ const InvoiceCreate = () => {
       customerMobileNumber1: '',
       customerMobileNumber2: '',
       customerAddress: '',
+      deliveredThrough: '',
       products: [],
       deliveryCharges: 0
     });
@@ -739,6 +748,22 @@ const InvoiceCreate = () => {
                     placeholder="Enter complete customer address"
                     onKeyDown={(e) => handleCustomerTab(e, 'customerAddress')}
                     className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all duration-200 text-gray-900 placeholder-gray-300 bg-white shadow-sm resize-none" />
+                </div>
+                {/* Row 3: Delivered Through (Required) */}
+                <div>
+                  <label htmlFor="deliveredThrough" className="block text-[10px] font-medium text-gray-500 mb-1 uppercase tracking-wider">
+                    Delivered Through <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    id="deliveredThrough" name="deliveredThrough"
+                    value={formData.deliveredThrough || ''}
+                    onChange={handleInputChange} required
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all duration-200 text-gray-900 bg-white shadow-sm">
+                    <option value="">Select delivery method</option>
+                    <option value="TCS">TCS</option>
+                    <option value="M&P">M&P</option>
+                    <option value="P/O">P/O</option>
+                  </select>
                 </div>
               </div>
             </div>
