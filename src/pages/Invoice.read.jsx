@@ -425,6 +425,9 @@ const InvoiceRead = () => {
         </div>
 
         <div style="position:relative;margin-top:10px;">
+            <span style="font-size:20px; font-weight:bold; font-family:Arial, sans-serif; white-space:nowrap; justify:center; align:center">
+  ${inv.deliveredThrough || 'N/A'}
+</span>
           <table style="width:100%;border-collapse:collapse;font-size:18px;font-family:Arial, sans-serif;margin-top:10px;">
             <tr>
               <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">To</td>
@@ -439,11 +442,6 @@ const InvoiceRead = () => {
               <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">${inv.customerAddress || 'N/A'}</td>
             </tr>
           </table>
-          <div style="position:absolute; right:-70px; top:0; height:100%; display:flex; align-items:center; justify-content:center;">
-            <span style="writing-mode:vertical-rl; transform:rotate(180deg); font-size:20px; font-weight:bold; font-family:Arial, sans-serif; white-space:nowrap; position:relative; right:45px;">
-  ${inv.deliveredThrough || 'N/A'}
-</span>
-          </div>
         </div>
 
         <table style="width:100%;border-collapse:collapse;font-size:18px;font-family:Arial, sans-serif;margin-top:10px;">
