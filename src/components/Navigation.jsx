@@ -35,6 +35,7 @@ const Navigation = () => {
         { path: '/read_invoice', label: 'View All'},
         { path: '/update_invoice', label: 'Update'},
         { path: '/delete_invoice', label: 'Delete'},
+        { path: '/recoveryDelete_invoice', label: 'Recovery Delete'},
       ],
     },
     {
