@@ -1,114 +1,73 @@
-// InvoiceRead.jsx - Fixed Specific Date + Infinite Scroll + Bulk Selection (PKT support)
+// InvoiceRead.jsx — File 1 design + selection logic + File 2 B&W print/color/note fixes
+// ✅ B&W print output, product color in print, note only in print, no reload-to-print bug
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import axios from 'axios';
 
 const API_BASE_URL = 'https://bisni-ms-backend.onrender.com/api';
 
-// ✅ Pakistan Standard Time (UTC+5) - Full date & time
+/* ---------- PKT date helpers (unchanged logic) ---------- */
 const formatPakistanTime = (dateString) => {
   if (!dateString) return 'N/A';
   return new Date(dateString).toLocaleString('en-PK', {
-    timeZone: 'Asia/Karachi',
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: true
+    timeZone: 'Asia/Karachi', year: 'numeric', month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true,
   });
 };
-
-// ✅ Pakistan Standard Time (UTC+5) - Date & time without seconds
 const formatPakistanTimeShort = (dateString) => {
   if (!dateString) return 'N/A';
   return new Date(dateString).toLocaleString('en-PK', {
-    timeZone: 'Asia/Karachi',
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true
+    timeZone: 'Asia/Karachi', year: 'numeric', month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit', hour12: true,
   });
 };
-
-// ✅ Get PKT date string (YYYY-MM-DD) from a UTC date string
 const getPktDateString = (dateString) => {
   if (!dateString) return '';
   const d = new Date(dateString);
-  const pktOffset = 5 * 60 * 60 * 1000;
-  const pktDate = new Date(d.getTime() + pktOffset);
-  return pktDate.toISOString().split('T')[0];
+  const pkt = new Date(d.getTime() + 5 * 60 * 60 * 1000);
+  return pkt.toISOString().split('T')[0];
 };
-
-// ✅ Check if a UTC date matches a specific PKT date (YYYY-MM-DD)
-const isSamePktDate = (utcDateString, pktDateString) => {
-  if (!utcDateString || !pktDateString) return false;
-  return getPktDateString(utcDateString) === pktDateString;
-};
-
-// ✅ Check if a UTC date is within a PKT date range (start/end YYYY-MM-DD)
-const isWithinPktRange = (utcDateString, startPkt, endPkt) => {
-  if (!utcDateString) return false;
-  const d = new Date(utcDateString).getTime();
-
+const isSamePktDate = (utc, pkt) =>
+  !!utc && !!pkt && getPktDateString(utc) === pkt;
+const isWithinPktRange = (utc, startPkt, endPkt) => {
+  if (!utc) return false;
+  const d = new Date(utc).getTime();
   if (startPkt) {
     const [sy, sm, sd] = startPkt.split('-').map(Number);
-    const startUtc = Date.UTC(sy, sm - 1, sd - 1, 19, 0, 0, 0); // 00:00 PKT
-    if (d < startUtc) return false;
+    if (d < Date.UTC(sy, sm - 1, sd - 1, 19, 0, 0, 0)) return false;
   }
-
   if (endPkt) {
     const [ey, em, ed] = endPkt.split('-').map(Number);
-    const endUtc = Date.UTC(ey, em - 1, ed, 18, 59, 59, 999); // 23:59:59.999 PKT
-    if (d > endUtc) return false;
+    if (d > Date.UTC(ey, em - 1, ed, 18, 59, 59, 999)) return false;
   }
-
   return true;
 };
 
-const PAGE_SIZE = 10; // ✅ Load 10 at a time
+const PAGE_SIZE = 10;
 
 const InvoiceRead = () => {
-  const [allFilteredInvoices, setAllFilteredInvoices] = useState([]); // All matching invoices
-  const [invoices, setInvoices] = useState([]);                        // Visible (loaded) invoices
-  const [loading, setLoading] = useState(true);                        // Initial load
-  const [loadingMore, setLoadingMore] = useState(false);               // Loading next batch
+  const [allFilteredInvoices, setAllFilteredInvoices] = useState([]);
+  const [invoices, setInvoices] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
   const [selectedInvoice, setSelectedInvoice] = useState(null);
   const [employees, setEmployees] = useState([]);
 
-  // Bulk selection states
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [selectAll, setSelectAll] = useState(false);
 
-  // Filter states
   const [filters, setFilters] = useState({
-    employeeCategory: '',
-    customerName: '',
-    customerMobileNumber: '',
-    invoiceId: '',
-    date: '',
-    startDate: '',
-    endDate: '',
-    employeeName: '',
-    deliveredThrough: '',
+    employeeCategory: '', customerName: '', customerMobileNumber: '', invoiceId: '',
+    date: '', startDate: '', endDate: '', employeeName: '', deliveredThrough: '',
   });
 
-  // ✅ FIX #1: Keep latest filters in a ref so fetchInvoices never uses stale values
   const filtersRef = useRef(filters);
-  useEffect(() => {
-    filtersRef.current = filters;
-  }, [filters]);
+  useEffect(() => { filtersRef.current = filters; }, [filters]);
 
-  // ✅ Infinite scroll refs
   const sentinelRef = useRef(null);
   const pageRef = useRef(0);
-
-  // ✅ FIX #2: Use a ref to prevent double-fetching on mount (React StrictMode)
   const didInitRef = useRef(false);
 
   useEffect(() => {
@@ -120,672 +79,374 @@ const InvoiceRead = () => {
 
   const fetchEmployees = async () => {
     try {
-      const response = await axios.get(`${API_BASE_URL}/employee`);
-      setEmployees(response.data.data || response.data || []);
-    } catch (error) {
-      console.error('Error fetching employees:', error);
-    }
+      const res = await axios.get(`${API_BASE_URL}/employee`);
+      setEmployees(res.data.data || res.data || []);
+    } catch (e) { console.error('Employee fetch error:', e); }
   };
 
-  // ✅ FIX #3: Use filtersRef fallback so callers without args still get latest filters
   const fetchInvoices = useCallback(async (filterParams) => {
     try {
-      setLoading(true);
-      setError(null);
-      pageRef.current = 0;
-
-      const activeFilters = filterParams !== undefined ? filterParams : filtersRef.current;
-
+      setLoading(true); setError(null); pageRef.current = 0;
+      const active = filterParams !== undefined ? filterParams : filtersRef.current;
       const params = new URLSearchParams();
-
-      // ✅ Sirf non-date filters backend ko bhejo
-      Object.keys(activeFilters).forEach(key => {
-        if (activeFilters[key] && key !== 'date' && key !== 'startDate' && key !== 'endDate') {
-          params.append(key, activeFilters[key]);
-        }
+      Object.keys(active).forEach(k => {
+        if (active[k] && k !== 'date' && k !== 'startDate' && k !== 'endDate')
+          params.append(k, active[k]);
       });
-
-      const queryString = params.toString();
-      const url = queryString ? `${API_BASE_URL}/invoice?${queryString}` : `${API_BASE_URL}/invoice`;
-
-      const response = await axios.get(url);
-      let data = response.data.data || response.data || [];
-
-      // ✅ Client-side PKT date filters
-      if (activeFilters.date) {
-        data = data.filter(inv => isSamePktDate(inv.createdAt, activeFilters.date));
-      }
-      if (activeFilters.startDate || activeFilters.endDate) {
-        data = data.filter(inv =>
-          isWithinPktRange(inv.createdAt, activeFilters.startDate, activeFilters.endDate)
-        );
-      }
+      const qs = params.toString();
+      const url = qs ? `${API_BASE_URL}/invoice?${qs}` : `${API_BASE_URL}/invoice`;
+      const res = await axios.get(url);
+      let data = res.data.data || res.data || [];
+      if (active.date) data = data.filter(i => isSamePktDate(i.createdAt, active.date));
+      if (active.startDate || active.endDate)
+        data = data.filter(i => isWithinPktRange(i.createdAt, active.startDate, active.endDate));
 
       setAllFilteredInvoices(data);
-
-      // ✅ Sirf pehle 10 visible karo
       setInvoices(data.slice(0, PAGE_SIZE));
       setHasMore(data.length > PAGE_SIZE);
-
-      // Clear selection on new fetch
-      setSelectedIds(new Set());
-      setSelectAll(false);
-
+      setSelectedIds(new Set()); setSelectAll(false);
       setSuccess(`${data.length} invoice(s) loaded`);
       setTimeout(() => setSuccess(null), 3000);
-
-    } catch (error) {
-      console.error('Error fetching invoices:', error);
-      setError('Failed to load invoices. Please try again later.');
-    } finally {
-      setLoading(false);
-    }
+    } catch (e) {
+      console.error(e); setError('Failed to load invoices. Please try again later.');
+    } finally { setLoading(false); }
   }, []);
 
-  // ✅ Load next 10 invoices (used by infinite scroll)
   const loadMore = useCallback(() => {
     if (loadingMore || !hasMore) return;
-
     setLoadingMore(true);
     const nextPage = pageRef.current + 1;
-    const startIdx = nextPage * PAGE_SIZE;
-    const endIdx = startIdx + PAGE_SIZE;
-
+    const start = nextPage * PAGE_SIZE, end = start + PAGE_SIZE;
     setTimeout(() => {
-      const nextBatch = allFilteredInvoices.slice(startIdx, endIdx);
-      setInvoices(prev => [...prev, ...nextBatch]);
+      setInvoices(prev => [...prev, ...allFilteredInvoices.slice(start, end)]);
       pageRef.current = nextPage;
-      setHasMore(endIdx < allFilteredInvoices.length);
+      setHasMore(end < allFilteredInvoices.length);
       setLoadingMore(false);
     }, 250);
   }, [loadingMore, hasMore, allFilteredInvoices]);
 
-  // ✅ IntersectionObserver for infinite scroll
   useEffect(() => {
     if (!sentinelRef.current) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0].isIntersecting && hasMore && !loadingMore && !loading) {
-          loadMore();
-        }
-      },
+    const obs = new IntersectionObserver(
+      ([e]) => { if (e.isIntersecting && hasMore && !loadingMore && !loading) loadMore(); },
       { rootMargin: '200px' }
     );
-
-    observer.observe(sentinelRef.current);
-    return () => observer.disconnect();
+    obs.observe(sentinelRef.current);
+    return () => obs.disconnect();
   }, [loadMore, hasMore, loadingMore, loading]);
 
   const handleFilterChange = (e) => {
     const { name, value } = e.target;
-    setFilters(prev => ({ ...prev, [name]: value }));
+    setFilters(p => ({ ...p, [name]: value }));
   };
-
-  // ✅ Apply filters — dates client-side PKT logic se handle honge
-  const applyFilters = () => {
-    fetchInvoices(filters);
-  };
-
+  const applyFilters = () => fetchInvoices(filters);
   const clearFilters = () => {
-    const emptyFilters = {
-      employeeCategory: '',
-      customerName: '',
-      customerMobileNumber: '',
-      invoiceId: '',
-      date: '',
-      startDate: '',
-      endDate: '',
-      employeeName: '',
-      deliveredThrough: ''
+    const empty = {
+      employeeCategory: '', customerName: '', customerMobileNumber: '', invoiceId: '',
+      date: '', startDate: '', endDate: '', employeeName: '', deliveredThrough: '',
     };
-    setFilters(emptyFilters);
-    fetchInvoices(emptyFilters);
+    setFilters(empty); fetchInvoices(empty);
   };
 
-  // ===== SELECTION HANDLERS =====
   const toggleSelect = useCallback((id) => {
     setSelectedIds(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(id)) {
-        newSet.delete(id);
-      } else {
-        newSet.add(id);
-      }
-      return newSet;
+      const s = new Set(prev);
+      s.has(id) ? s.delete(id) : s.add(id);
+      return s;
     });
   }, []);
-
   const handleSelectAll = useCallback(() => {
-    if (selectAll) {
-      setSelectedIds(new Set());
-      setSelectAll(false);
-    } else {
-      const allIds = allFilteredInvoices.map(inv => inv._id);
-      setSelectedIds(new Set(allIds));
-      setSelectAll(true);
-    }
+    if (selectAll) { setSelectedIds(new Set()); setSelectAll(false); }
+    else { setSelectedIds(new Set(allFilteredInvoices.map(i => i._id))); setSelectAll(true); }
   }, [selectAll, allFilteredInvoices]);
-
   useEffect(() => {
-    if (allFilteredInvoices.length === 0) {
-      setSelectAll(false);
-      return;
-    }
-    const allSelected = allFilteredInvoices.every(inv => selectedIds.has(inv._id));
-    setSelectAll(allSelected);
+    if (!allFilteredInvoices.length) { setSelectAll(false); return; }
+    setSelectAll(allFilteredInvoices.every(i => selectedIds.has(i._id)));
   }, [selectedIds, allFilteredInvoices]);
-
-  const clearSelection = useCallback(() => {
-    setSelectedIds(new Set());
-    setSelectAll(false);
-  }, []);
-
-  const selectedInvoices = useMemo(() => {
-    return allFilteredInvoices.filter(inv => selectedIds.has(inv._id));
-  }, [allFilteredInvoices, selectedIds]);
-
-  const selectByEmployee = useCallback((employeeName) => {
-    const ids = allFilteredInvoices
-      .filter(inv => inv.employeeName === employeeName)
-      .map(inv => inv._id);
-    setSelectedIds(prev => {
-      const newSet = new Set(prev);
-      ids.forEach(id => newSet.add(id));
-      return newSet;
-    });
+  const clearSelection = useCallback(() => { setSelectedIds(new Set()); setSelectAll(false); }, []);
+  const selectedInvoices = useMemo(
+    () => allFilteredInvoices.filter(i => selectedIds.has(i._id)),
+    [allFilteredInvoices, selectedIds]
+  );
+  const selectByEmployee = useCallback((name) => {
+    const ids = allFilteredInvoices.filter(i => i.employeeName === name).map(i => i._id);
+    setSelectedIds(prev => { const s = new Set(prev); ids.forEach(x => s.add(x)); return s; });
+  }, [allFilteredInvoices]);
+  const selectByDate = useCallback((d) => {
+    const ids = allFilteredInvoices.filter(i => isSamePktDate(i.createdAt, d)).map(i => i._id);
+    setSelectedIds(prev => { const s = new Set(prev); ids.forEach(x => s.add(x)); return s; });
   }, [allFilteredInvoices]);
 
-  const selectByDate = useCallback((dateStr) => {
-    const ids = allFilteredInvoices
-      .filter(inv => isSamePktDate(inv.createdAt, dateStr))
-      .map(inv => inv._id);
-    setSelectedIds(prev => {
-      const newSet = new Set(prev);
-      ids.forEach(id => newSet.add(id));
-      return newSet;
-    });
-  }, [allFilteredInvoices]);
+  const findEmployee = (inv) => employees.find(emp =>
+    emp.employeeName === inv.employeeName &&
+    emp.employeeMobileNumber === inv.employeeMobileNumber
+  );
 
   const handleViewInvoice = (invoice) => {
-    const employee = employees.find(emp =>
-      emp.employeeName === invoice.employeeName &&
-      emp.employeeMobileNumber === invoice.employeeMobileNumber &&
-      emp.employeeAddres === invoice.employeeAddres
-    );
-
-    setSelectedInvoice({
-      ...invoice,
-      employeeCommission: employee?.employeeCommission || []
-    });
+    const emp = findEmployee(invoice);
+    setSelectedInvoice({ ...invoice, employeeCommission: emp?.employeeCommission || [] });
   };
 
   const calculateEmployeeCommission = (products, employeeCommission) => {
-    if (!employeeCommission || employeeCommission.length === 0) return 0;
-    let totalCommission = 0;
-    products.forEach(product => {
-      const commission = employeeCommission.find(c => c.productName === product.productName);
-      if (commission) {
-        totalCommission += commission.commissionAmount * product.productQuantity;
-      }
+    if (!employeeCommission || !employeeCommission.length) return 0;
+    let total = 0;
+    products.forEach(p => {
+      const c = employeeCommission.find(x => x.productName === p.productName);
+      if (c) total += c.commissionAmount * p.productQuantity;
     });
-    return totalCommission;
+    return total;
   };
+  const calculateInvoiceCommission = (inv) =>
+    calculateEmployeeCommission(inv.products, findEmployee(inv)?.employeeCommission || []);
 
-  const calculateInvoiceCommission = (invoice) => {
-    const employee = employees.find(emp =>
-      emp.employeeName === invoice.employeeName &&
-      emp.employeeMobileNumber === invoice.employeeMobileNumber &&
-      emp.employeeAddres === invoice.employeeAddres
-    );
-    return calculateEmployeeCommission(invoice.products, employee?.employeeCommission || []);
-  };
-
-  // ===== BUILD INVOICE HTML =====
+  /* ================= B&W PRINT HTML (File 2 style) ================= */
   const buildInvoiceHTML = (inv) => {
-    const employee = employees.find(emp =>
-      emp.employeeName === inv.employeeName &&
-      emp.employeeMobileNumber === inv.employeeMobileNumber &&
-      emp.employeeAddres === inv.employeeAddres
-    );
-    const commission = calculateEmployeeCommission(inv.products, employee?.employeeCommission || []);
+    const commission = calculateInvoiceCommission(inv);
+    const cur = (a) => (a || 0).toFixed(2);
+    const dt = (d) => d ? new Date(d).toLocaleString('en-PK', {
+      timeZone: 'Asia/Karachi', year: 'numeric', month: 'short', day: 'numeric',
+      hour: '2-digit', minute: '2-digit', hour12: true,
+    }) : 'N/A';
 
-    const formatCur = (amount) => (amount || 0).toFixed(2);
-    const formatDt = (dateString) => {
-      if (!dateString) return 'N/A';
-      return new Date(dateString).toLocaleString('en-PK', {
-        timeZone: 'Asia/Karachi',
-        year: 'numeric', month: 'short', day: 'numeric',
-        hour: '2-digit', minute: '2-digit', hour12: true
-      });
-    };
-
-    const subtotal = inv.products.reduce((sum, p) => sum + (p.productTotalAmount || 0), 0);
+    const subtotal = inv.products.reduce((s, p) => s + (p.productTotalAmount || 0), 0);
 
     const productRows = inv.products.map((p, i) => `
       <tr>
         <td style="text-align:center;">${i + 1}</td>
-        <td>${p.productName} <span style="color:#888;font-size:12px;">(${p.productCategory})</span></td>
+        <td>${p.productName} <span style="color:#000;font-size:12px;">(${p.productCategory}, ${p.productColor})</span></td>
         <td style="text-align:center;">${p.productQuantity}</td>
-        <td style="text-align:right;">Rs. ${formatCur(p.productSalePrice)}</td>
-        <td style="text-align:right;">Rs. ${formatCur(p.productTotalAmount)}</td>
-      </tr>
-    `).join('');
+        <td style="text-align:right;">Rs. ${cur(p.productSalePrice)}</td>
+        <td style="text-align:right;">Rs. ${cur(p.productTotalAmount)}</td>
+      </tr>`).join('');
 
     const commissionRow = commission > 0 ? `
       <tr>
-        <td colspan="2" style="font-weight:600;color:#15803d;">Employee Commission</td>
-        <td colspan="3" style="text-align:right;font-weight:600;color:#15803d;">Rs. ${formatCur(commission)}</td>
+        <td colspan="2" style="font-weight:600;color:#000;">Employee Commission</td>
+        <td colspan="3" style="text-align:right;font-weight:600;color:#000;">Rs. ${cur(commission)}</td>
       </tr>` : '';
 
+    const noteRow = inv.note ? `
+      <div class="section">
+        <h3 style="color:#000;border-bottom:1px solid #000;">Note</h3>
+        <p style="font-size:12px;color:#000;">${inv.note}</p>
+      </div>` : '';
+
     return `
-      <div class="invoice-page">
-        <div class="header">
-          <h1>📦 INVOICE</h1>
-          <p>Invoice ID: ${inv.invoiceId}</p>
-          <div class="dates">
-            <span>Created: ${formatDt(inv.createdAt)}</span>
-            <span>Printed: ${formatDt(new Date().toISOString())}</span>
-          </div>
-        </div>
-
-        <div class="section">
-          <h3>Order Details</h3>
-          <div class="info-grid">
-            <div class="info-box">
-              <p><span>Employee:</span> ${inv.employeeName}</p>
-              <p><span>Category:</span> ${inv.employeeCategory}</p>
-              <p><span>Mobile:</span> ${inv.employeeMobileNumber}</p>
-            </div>
-            <div class="info-box">
-              <p><span>Customer:</span> ${inv.customerName}</p>
-              <p><span>Contact:</span> ${inv.customerMobileNumber1}</p>
-              <p><span>Address:</span> ${inv.customerAddress || 'N/A'}</p>
-            </div>
-          </div>
-        </div>
-
-        <div class="section">
-          <h3>Products</h3>
-          <table>
-            <thead>
-              <tr>
-                <th style="text-align:center;width:30px;">#</th>
-                <th>Product & Category</th>
-                <th style="text-align:center;width:40px;">Qty</th>
-                <th style="text-align:right;width:80px;">Price</th>
-                <th style="text-align:right;width:80px;">Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${productRows}
-            </tbody>
-          </table>
-        </div>
-
-        <div class="section">
-          <table class="totals">
-            <tr><td>Subtotal:</td><td style="text-align:right;">Rs. ${formatCur(subtotal)}</td></tr>
-            ${inv.deliveryCharges > 0 ? `<tr><td>Delivery Charges:</td><td style="text-align:right;">Rs. ${formatCur(inv.deliveryCharges)}</td></tr>` : ''}
-            <tr class="grand-total"><td>Grand Total:</td><td style="text-align:right;">Rs. ${formatCur(inv.grandTotalAmount)}</td></tr>
-            ${commissionRow}
-          </table>
-        </div>
-
-        <div style="position:relative;margin-top:10px;">
-            <span style="font-size:20px; font-weight:bold; font-family:Arial, sans-serif; white-space:nowrap; justify:center; align:center">
-  ${inv.deliveredThrough || 'N/A'}
-</span>
-          <table style="width:100%;border-collapse:collapse;font-size:18px;font-family:Arial, sans-serif;margin-top:10px;">
-            <tr>
-              <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">To</td>
-              <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">${inv.customerName || 'N/A'}</td>
-            </tr>
-            <tr>
-              <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">Contact</td>
-              <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">${inv.customerMobileNumber1 || 'N/A'} &nbsp;&nbsp;||&nbsp;&nbsp; ${inv.customerMobileNumber2 || 'N/A'}</td>
-            </tr>
-            <tr>
-              <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">Address</td>
-              <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">${inv.customerAddress || 'N/A'}</td>
-            </tr>
-          </table>
-        </div>
-
-        <table style="width:100%;border-collapse:collapse;font-size:18px;font-family:Arial, sans-serif;margin-top:10px;">
-          <tr>
-            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">From</td>
-            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">${inv.employeeName || 'N/A'}</td>
-          </tr>
-          <tr>
-            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">Contact</td>
-            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">${inv.employeeMobileNumber || 'N/A'}</td>
-          </tr>
-          <tr>
-            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size: 22px;">Address</td>
-            <td style="border:2px solid #000; padding:4px 6px; font-weight:bold; font-size: 22px;">${inv.employeeAddress || 'N/A'}</td>
-          </tr>
-        </table>
-
-        <div class="footer">
-          <p>Generated by Bisni Sales Management | Thank you for Your Order!</p>
+    <div class="invoice-page">
+      <div class="header">
+        <h1>INVOICE</h1>
+        <p>Invoice ID: ${inv.invoiceId}</p>
+        <div class="dates">
+          <span>Created: ${dt(inv.createdAt)}</span>
+          <span>Printed: ${dt(new Date().toISOString())}</span>
         </div>
       </div>
-    `;
+
+      <div class="section">
+        <h3>Order Details</h3>
+        <div class="info-grid">
+          <div class="info-box">
+            <p><span>Employee:</span> ${inv.employeeName}</p>
+            <p><span>Category:</span> ${inv.employeeCategory}</p>
+            <p><span>Mobile:</span> ${inv.employeeMobileNumber}</p>
+          </div>
+          <div class="info-box">
+            <p><span>Customer:</span> ${inv.customerName}</p>
+            <p><span>Contact:</span> ${inv.customerMobileNumber1}</p>
+            <p><span>Address:</span> ${inv.customerAddress || 'N/A'}</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <h3>Products</h3>
+        <table>
+          <thead>
+            <tr>
+              <th style="text-align:center;width:30px;">#</th>
+              <th>Product & Category & Color</th>
+              <th style="text-align:center;width:40px;">Qty</th>
+              <th style="text-align:right;width:80px;">Price</th>
+              <th style="text-align:right;width:80px;">Total</th>
+            </tr>
+          </thead>
+          <tbody>${productRows}</tbody>
+        </table>
+      </div>
+
+      <div class="section">
+        <table class="totals">
+          <tr><td>Subtotal:</td><td style="text-align:right;">Rs. ${cur(subtotal)}</td></tr>
+          ${inv.deliveryCharges > 0 ? `<tr><td>Delivery Charges:</td><td style="text-align:right;">Rs. ${cur(inv.deliveryCharges)}</td></tr>` : ''}
+          <tr class="grand-total"><td>Grand Total:</td><td style="text-align:right;">Rs. ${cur(inv.grandTotalAmount)}</td></tr>
+          ${commissionRow}
+        </table>
+      </div>
+
+      ${noteRow}
+
+      <div style="position:relative;margin-top:10px;">
+        <span style="font-size:20px; font-weight:bold; font-family:Arial, sans-serif; white-space:nowrap; color:#000;">
+          ${inv.deliveredThrough || 'N/A'}
+        </span>
+        <table style="width:100%;border-collapse:collapse;font-size:18px;font-family:Arial, sans-serif;margin-top:10px;">
+          <tr>
+            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size:22px; color:#000;">To</td>
+            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size:22px; color:#000;">${inv.customerName || 'N/A'}</td>
+          </tr>
+          <tr>
+            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size:22px; color:#000;">Contact</td>
+            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size:22px; color:#000;">${inv.customerMobileNumber1 || 'N/A'} &nbsp;||&nbsp; ${inv.customerMobileNumber2 || 'N/A'}</td>
+          </tr>
+          <tr>
+            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size:22px; color:#000;">Address</td>
+            <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size:22px; color:#000;">${inv.customerAddress || 'N/A'}</td>
+          </tr>
+        </table>
+      </div>
+
+      <table style="width:100%;border-collapse:collapse;font-size:18px;font-family:Arial, sans-serif;margin-top:10px;">
+        <tr>
+          <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size:22px; color:#000;">From</td>
+          <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size:22px; color:#000;">${inv.employeeName || 'N/A'}</td>
+        </tr>
+        <tr>
+          <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size:22px; color:#000;">Contact</td>
+          <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size:22px; color:#000;">${inv.employeeMobileNumber || 'N/A'}</td>
+        </tr>
+        <tr>
+          <td style="border:2px solid #000; padding:2px 3px; font-weight:bold; font-size:22px; color:#000;">Address</td>
+          <td style="border:2px solid #000; padding:4px 6px; font-weight:bold; font-size:22px; color:#000;">${inv.employeeAddress || 'N/A'}</td>
+        </tr>
+      </table>
+
+      <div class="footer">
+        <p>Generated by Bisni Sales Management | Thank you for Your Order!</p>
+      </div>
+    </div>`;
   };
 
+  /* ✅ B&W print CSS — everything black on white */
   const printCSS = `
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 25px; color: #1a1a2e; max-width: 800px; margin: 0 auto; }
-    .header { text-align: center; border-bottom: 3px solid #0891b2; padding-bottom: 15px; margin-bottom: 20px; }
-    .header h1 { color: #0891b2; margin: 0; font-size: 24px; letter-spacing: 1px; }
-    .header p { margin: 5px 0; color: #64748b; font-size: 13px; }
-    .header .dates { display: flex; justify-content: space-between; font-size: 11px; color: #94a3b8; margin-top: 8px; }
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 25px; color: #000; max-width: 800px; margin: 0 auto; }
+    .header { text-align: center; border-bottom: 3px solid #000; padding-bottom: 15px; margin-bottom: 20px; }
+    .header h1 { color: #000; margin: 0; font-size: 24px; letter-spacing: 1px; }
+    .header p { margin: 5px 0; color: #000; font-size: 13px; }
+    .header .dates { display: flex; justify-content: space-between; font-size: 11px; color: #000; margin-top: 8px; }
     .section { margin-bottom: 18px; }
-    .section h3 { color: #06b6d4; border-bottom: 1px solid #e2e8f0; padding-bottom: 5px; font-size: 14px; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
-    .section p { font-size: 12px; margin-bottom: 3px; }
-    .section span { font-weight: 500; color: #334155; }
+    .section h3 { color: #000; border-bottom: 1px solid #000; padding-bottom: 5px; font-size: 14px; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .section p { font-size: 12px; margin-bottom: 3px; color: #000; }
+    .section span { font-weight: 500; color: #000; }
     .info-grid { display: flex; gap: 25px; }
     .info-box { flex: 1; }
     table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-    th { background: #f0fdfa; padding: 9px 10px; text-align: left; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 2px solid #0891b2; color: #0f766e; }
-    td { padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 13px; }
+    th { background: #fff; padding: 9px 10px; text-align: left; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 2px solid #000; color: #000; }
+    td { padding: 8px 10px; border-bottom: 1px solid #000; font-size: 13px; color: #000; }
     .totals { width: 380px; margin-left: auto; margin-top: 8px; }
-    .totals td { border: none; padding: 5px 8px; font-size: 13px; }
-    .totals .grand-total { font-weight: 700; font-size: 15px; border-top: 2px solid #0891b2; color: #0891b2; }
+    .totals td { border: none; padding: 5px 8px; font-size: 13px; color: #000; }
+    .totals .grand-total { font-weight: 700; font-size: 15px; border-top: 2px solid #000; color: #000; }
     .totals .grand-total td { padding-top: 8px; }
-    .footer { text-align: center; margin-top: 25px; font-size: 11px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 12px; }
+    .footer { text-align: center; margin-top: 25px; font-size: 11px; color: #000; border-top: 1px solid #000; padding-top: 12px; }
     .invoice-page { page-break-after: always; }
     .invoice-page:last-child { page-break-after: auto; }
     @media print { body { padding: 10px; max-width: 100%; } }
     @page { size: A4; margin: 8mm; }
   `;
 
+  const openPrintWindow = (title, innerHtml) => {
+    const html = `<!DOCTYPE html><html><head><title>${title}</title><style>${printCSS}</style></head>
+      <body>${innerHtml}<script>window.onload=function(){window.print();}<\/script></body></html>`;
+    const w = window.open('', '_blank');
+    if (!w) { setError('Please allow popups to print'); return; }
+    w.document.write(html); w.document.close();
+  };
+
+  /* ✅ No reload bug: fresh lookup from allFilteredInvoices → invoices fallback */
   const handlePrint = (invoiceId) => {
     const inv = allFilteredInvoices.find(i => i._id === invoiceId || i.invoiceId === invoiceId)
              || invoices.find(i => i._id === invoiceId || i.invoiceId === invoiceId);
-    if (!inv) {
-      setError('Invoice not found');
-      return;
-    }
-
-    const html = `<!DOCTYPE html>
-    <html>
-    <head>
-      <title>Invoice ${inv.invoiceId}</title>
-      <style>${printCSS}</style>
-    </head>
-    <body>
-      ${buildInvoiceHTML(inv)}
-      <script>window.onload=function(){window.print();}<\/script>
-    </body>
-    </html>`;
-
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) {
-      setError('Please allow popups to print the invoice');
-      return;
-    }
-    printWindow.document.write(html);
-    printWindow.document.close();
+    if (!inv) { setError('Invoice not found'); return; }
+    openPrintWindow(`Invoice ${inv.invoiceId}`, buildInvoiceHTML(inv));
   };
 
   const handlePrintSelected = () => {
-    if (selectedInvoices.length === 0) {
-      setError('Please select at least one invoice to print');
-      return;
-    }
+    if (!selectedInvoices.length) { setError('Please select at least one invoice to print'); return; }
+    openPrintWindow(`Selected Invoices (${selectedInvoices.length})`,
+      selectedInvoices.map(inv => buildInvoiceHTML(inv)).join(''));
+  };
 
-    const allPages = selectedInvoices.map(inv => buildInvoiceHTML(inv)).join('');
-
-    const html = `<!DOCTYPE html>
-    <html>
-    <head>
-      <title>Selected Invoices (${selectedInvoices.length})</title>
-      <style>${printCSS}</style>
-    </head>
-    <body>
-      ${allPages}
-      <script>window.onload=function(){window.print();}<\/script>
-    </body>
-    </html>`;
-
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) {
-      setError('Please allow popups to print the invoices');
-      return;
-    }
-    printWindow.document.write(html);
-    printWindow.document.close();
+  const buildListReport = (list, title, info) => {
+    const cur = (a) => (a || 0).toFixed(2);
+    const dt = (d) => d ? new Date(d).toLocaleString('en-PK', {
+      timeZone: 'Asia/Karachi', year: 'numeric', month: 'short', day: 'numeric',
+      hour: '2-digit', minute: '2-digit', hour12: true,
+    }) : 'N/A';
+    let totComm = 0, totAmt = 0;
+    const rows = list.map((inv, i) => {
+      const c = calculateInvoiceCommission(inv);
+      totComm += c; totAmt += (inv.grandTotalAmount || 0);
+      return `<tr>
+        <td style="text-align:center;">${i + 1}</td>
+        <td>${inv.invoiceId}</td>
+        <td>${dt(inv.createdAt)}</td>
+        <td>${inv.customerName || 'N/A'}</td>
+        <td>${inv.employeeName || 'N/A'}</td>
+        <td>${inv.deliveredThrough || 'N/A'}</td>
+        <td style="text-align:right;">Rs. ${cur(c)}</td>
+        <td style="text-align:right;">Rs. ${cur(inv.grandTotalAmount || 0)}</td>
+      </tr>`;
+    }).join('');
+    openPrintWindow(title, `
+      <div class="header">
+        <h1>INVOICES REPORT</h1>
+        <p>${info} | Total Invoices: ${list.length}</p>
+        <div class="dates">
+          <span>Generated: ${dt(new Date().toISOString())}</span>
+          <span>Total: ${list.length}</span>
+        </div>
+      </div>
+      <div class="section">
+        <h3>Invoice List</h3>
+        <table>
+          <thead><tr>
+            <th style="text-align:center;width:30px;">#</th>
+            <th>Invoice ID</th><th>Date</th><th>Customer</th>
+            <th>Employee</th><th>D/T</th>
+            <th style="text-align:right;">Commission</th>
+            <th style="text-align:right;">Total Amount</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <div class="section">
+        <table class="totals">
+          <tr><td>Total Commission:</td><td style="text-align:right;font-weight:600;color:#000;">Rs. ${cur(totComm)}</td></tr>
+          <tr class="grand-total"><td>Grand Total Revenue:</td><td style="text-align:right;">Rs. ${cur(totAmt)}</td></tr>
+        </table>
+      </div>
+      <div class="footer"><p>Generated by Bisni Sales Management | ${info}</p></div>`);
   };
 
   const handlePrintSelectedList = () => {
-    if (selectedInvoices.length === 0) {
-      setError('Please select at least one invoice to print');
-      return;
-    }
-
-    const formatCur = (amount) => (amount || 0).toFixed(2);
-    const formatDt = (dateString) => {
-      if (!dateString) return 'N/A';
-      return new Date(dateString).toLocaleString('en-PK', {
-        timeZone: 'Asia/Karachi',
-        year: 'numeric', month: 'short', day: 'numeric',
-        hour: '2-digit', minute: '2-digit', hour12: true
-      });
-    };
-
-    let totalCommission = 0;
-    let totalAmount = 0;
-
-    const invoiceRows = selectedInvoices.map((inv, i) => {
-      const commission = calculateInvoiceCommission(inv);
-      totalCommission += commission;
-      totalAmount += (inv.grandTotalAmount || 0);
-
-      return `
-        <tr>
-          <td style="text-align:center;">${i + 1}</td>
-          <td>${inv.invoiceId}</td>
-          <td>${formatDt(inv.createdAt)}</td>
-          <td>${inv.customerName || 'N/A'}</td>
-          <td>${inv.employeeName || 'N/A'}</td>
-          <td>${inv.deliveredThrough || 'N/A'}</td>
-          <td style="text-align:right;">Rs. ${formatCur(commission)}</td>
-          <td style="text-align:right;">Rs. ${formatCur(inv.grandTotalAmount || 0)}</td>
-        </tr>
-      `;
-    }).join('');
-
-    const html = `<!DOCTYPE html>
-    <html>
-    <head>
-      <title>Selected Invoices Report</title>
-      <style>${printCSS}</style>
-    </head>
-    <body>
-      <div class="header">
-        <h1>📋 SELECTED INVOICES REPORT</h1>
-        <p>Total Invoices: ${selectedInvoices.length}</p>
-        <div class="dates">
-          <span>Generated: ${formatDt(new Date().toISOString())}</span>
-          <span>Total Invoices: ${selectedInvoices.length}</span>
-        </div>
-      </div>
-
-      <div class="section">
-        <h3>Invoice List</h3>
-        <table>
-          <thead>
-            <tr>
-              <th style="text-align:center;width:30px;">#</th>
-              <th>Invoice ID</th>
-              <th>Date</th>
-              <th>Customer</th>
-              <th>Employee</th>
-              <th>D/T</th>
-              <th style="text-align:right;">Commission</th>
-              <th style="text-align:right;">Total Amount</th>
-            </tr>
-          </thead>
-          <tbody>${invoiceRows}</tbody>
-        </table>
-      </div>
-
-      <div class="section">
-        <table class="totals">
-          <tr>
-            <td>Total Commission:</td>
-            <td style="text-align:right;font-weight:600;color:#7c3aed;">Rs. ${formatCur(totalCommission)}</td>
-          </tr>
-          <tr class="grand-total">
-            <td>Grand Total Revenue:</td>
-            <td style="text-align:right;">Rs. ${formatCur(totalAmount)}</td>
-          </tr>
-        </table>
-      </div>
-
-      <div class="footer">
-        <p>Generated by Bisni Sales Management | Selected Invoices</p>
-      </div>
-      <script>window.onload=function(){window.print();}<\/script>
-    </body>
-    </html>`;
-
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) {
-      setError('Please allow popups to print the report');
-      return;
-    }
-    printWindow.document.write(html);
-    printWindow.document.close();
+    if (!selectedInvoices.length) { setError('Please select at least one invoice to print'); return; }
+    buildListReport(selectedInvoices, 'Selected Invoices Report', 'Selected Invoices');
   };
-
   const handlePrintFilteredList = () => {
-    if (allFilteredInvoices.length === 0) {
-      setError('No invoices to print');
-      return;
-    }
-
-    const formatCur = (amount) => (amount || 0).toFixed(2);
-    const formatDt = (dateString) => {
-      if (!dateString) return 'N/A';
-      return new Date(dateString).toLocaleString('en-PK', {
-        timeZone: 'Asia/Karachi',
-        year: 'numeric', month: 'short', day: 'numeric',
-        hour: '2-digit', minute: '2-digit', hour12: true
-      });
-    };
-
-    let totalCommission = 0;
-    let totalAmount = 0;
-
-    const invoiceRows = allFilteredInvoices.map((inv, i) => {
-      const commission = calculateInvoiceCommission(inv);
-      totalCommission += commission;
-      totalAmount += (inv.grandTotalAmount || 0);
-
-      return `
-        <tr>
-          <td style="text-align:center;">${i + 1}</td>
-          <td>${inv.invoiceId}</td>
-          <td>${formatDt(inv.createdAt)}</td>
-          <td>${inv.customerName || 'N/A'}</td>
-          <td>${inv.deliveredThrough || 'N/A'}</td>
-          <td style="text-align:right;">Rs. ${formatCur(commission)}</td>
-          <td style="text-align:right;">Rs. ${formatCur(inv.grandTotalAmount || 0)}</td>
-        </tr>
-      `;
-    }).join('');
-
+    if (!allFilteredInvoices.length) { setError('No invoices to print'); return; }
     const hasFilters = Object.values(filters).some(v => v);
-    const filterInfo = hasFilters ? 'Filtered Invoices' : 'All Invoices';
-
-    const html = `<!DOCTYPE html>
-    <html>
-    <head>
-      <title>Invoices Report - ${filterInfo}</title>
-      <style>${printCSS}</style>
-    </head>
-    <body>
-      <div class="header">
-        <h1>📋 INVOICES REPORT</h1>
-        <p>${filterInfo} | Total Invoices: ${allFilteredInvoices.length}</p>
-        <div class="dates">
-          <span>Generated: ${formatDt(new Date().toISOString())}</span>
-          <span>Total Invoices: ${allFilteredInvoices.length}</span>
-        </div>
-      </div>
-
-      <div class="section">
-        <h3>Invoice List</h3>
-        <table>
-          <thead>
-            <tr>
-              <th style="text-align:center;width:30px;">#</th>
-              <th>Invoice ID</th>
-              <th>Date</th>
-              <th>Customer</th>
-              <th>D/T</th>
-              <th style="text-align:right;">Commission</th>
-              <th style="text-align:right;">Total Amount</th>
-            </tr>
-          </thead>
-          <tbody>${invoiceRows}</tbody>
-        </table>
-      </div>
-
-      <div class="section">
-        <table class="totals">
-          <tr>
-            <td>Total Commission:</td>
-            <td style="text-align:right;font-weight:600;color:#7c3aed;">Rs. ${formatCur(totalCommission)}</td>
-          </tr>
-          <tr class="grand-total">
-            <td>Grand Total Revenue:</td>
-            <td style="text-align:right;">Rs. ${formatCur(totalAmount)}</td>
-          </tr>
-        </table>
-      </div>
-
-      <div class="footer">
-        <p>Generated by Bisni Sales Management | ${filterInfo}</p>
-      </div>
-      <script>window.onload=function(){window.print();}<\/script>
-    </body>
-    </html>`;
-
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) {
-      setError('Please allow popups to print the report');
-      return;
-    }
-    printWindow.document.write(html);
-    printWindow.document.close();
+    buildListReport(allFilteredInvoices, 'Invoices Report',
+      hasFilters ? 'Filtered Invoices' : 'All Invoices');
   };
 
-  const clearMessages = () => {
-    setError(null);
-    setSuccess(null);
-  };
-
-  const formatDate = (dateString) => {
-    return formatPakistanTimeShort(dateString);
-  };
-
-  const formatCurrency = (amount) => {
-    return new Intl.NumberFormat('en-US', {
-      minimumFractionDigits: 2, maximumFractionDigits: 2
-    }).format(amount || 0);
-  };
-
-  const calculateTotalItems = (products) => {
-    return products.reduce((sum, product) => sum + (product.productQuantity || 0), 0);
-  };
+  const clearMessages = () => { setError(null); setSuccess(null); };
+  const formatDate = (d) => formatPakistanTimeShort(d);
+  const formatCurrency = (a) => new Intl.NumberFormat('en-US',
+    { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(a || 0);
+  const calculateTotalItems = (p) => p.reduce((s, x) => s + (x.productQuantity || 0), 0);
 
   const selectedStats = useMemo(() => {
-    let totalAmount = 0;
-    let totalCommission = 0;
+    let totalAmount = 0, totalCommission = 0;
     selectedInvoices.forEach(inv => {
       totalAmount += (inv.grandTotalAmount || 0);
       totalCommission += calculateInvoiceCommission(inv);
@@ -794,35 +455,29 @@ const InvoiceRead = () => {
   }, [selectedInvoices, employees]);
 
   const uniqueEmployeesInList = useMemo(() => {
-    const map = {};
-    allFilteredInvoices.forEach(inv => {
-      if (!inv.employeeName) return;
-      if (!map[inv.employeeName]) map[inv.employeeName] = 0;
-      map[inv.employeeName]++;
-    });
-    return Object.entries(map).sort((a, b) => b[1] - a[1]);
+    const m = {};
+    allFilteredInvoices.forEach(i => { if (i.employeeName) m[i.employeeName] = (m[i.employeeName] || 0) + 1; });
+    return Object.entries(m).sort((a, b) => b[1] - a[1]);
   }, [allFilteredInvoices]);
 
   const uniqueDatesInList = useMemo(() => {
-    const map = {};
-    allFilteredInvoices.forEach(inv => {
-      if (!inv.createdAt) return;
-      const dateStr = getPktDateString(inv.createdAt);
-      if (!map[dateStr]) map[dateStr] = 0;
-      map[dateStr]++;
+    const m = {};
+    allFilteredInvoices.forEach(i => {
+      if (!i.createdAt) return;
+      const d = getPktDateString(i.createdAt);
+      m[d] = (m[d] || 0) + 1;
     });
-    return Object.entries(map).sort((a, b) => b[0].localeCompare(a[0]));
+    return Object.entries(m).sort((a, b) => b[0].localeCompare(a[0]));
   }, [allFilteredInvoices]);
 
+  /* ================= UI (File 1 design preserved) ================= */
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 py-3 sm:py-4 md:py-5 px-2 sm:px-3 md:px-4 lg:px-6">
       <div className="max-w-6xl mx-auto">
-        {/* Header */}
         <div className="text-center mb-4 sm:mb-5">
           <h1 className="text-lg sm:text-xl font-bold text-gray-900 mb-1">INVOICES RECORDS</h1>
         </div>
 
-        {/* Alert Messages */}
         {error && (
           <div className="mb-3 bg-red-50 border-l-4 border-red-500 p-2 sm:p-2.5 rounded-r-lg text-xs">
             <div className="flex items-start">
@@ -832,7 +487,6 @@ const InvoiceRead = () => {
             </div>
           </div>
         )}
-
         {success && (
           <div className="mb-3 bg-green-50 border-l-4 border-green-500 p-2 sm:p-2.5 rounded-r-lg text-xs">
             <div className="flex items-start">
@@ -843,7 +497,7 @@ const InvoiceRead = () => {
           </div>
         )}
 
-        {/* Filters Section */}
+        {/* Filters */}
         <div className="bg-white rounded-lg shadow-md overflow-hidden mb-3 sm:mb-4">
           <div className="bg-gradient-to-r from-blue-600 to-cyan-600 px-3 sm:px-4 py-2 sm:py-2.5">
             <h2 className="text-xs sm:text-sm font-semibold text-white flex items-center">
@@ -853,80 +507,49 @@ const InvoiceRead = () => {
               <span className="whitespace-nowrap">Search & Filter Invoices</span>
             </h2>
           </div>
-
           <div className="p-2 sm:p-3">
             <div className="grid grid-cols-1 xs:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 mb-3">
-              <div>
-                <label className="block text-2xs xs:text-xs font-medium text-gray-700 mb-1">Invoice ID</label>
-                <input type="text" name="invoiceId" value={filters.invoiceId} onChange={handleFilterChange}
-                  placeholder="e.g., INV-20260113-0001"
-                  className="w-full px-2 sm:px-2.5 py-1.5 border border-gray-300 rounded-md focus:ring-1 focus:ring-blue-500 text-xs" />
-              </div>
-              <div>
-                <label className="block text-2xs xs:text-xs font-medium text-gray-700 mb-1">Employee Name</label>
-                <input type="text" name="employeeName" value={filters.employeeName} onChange={handleFilterChange}
-                  placeholder="Search by employee"
-                  className="w-full px-2 sm:px-2.5 py-1.5 border border-gray-300 rounded-md focus:ring-1 focus:ring-blue-500 text-xs" />
-              </div>
-              <div>
-                <label className="block text-2xs xs:text-xs font-medium text-gray-700 mb-1">Employee Category</label>
-                <input type="text" name="employeeCategory" value={filters.employeeCategory} onChange={handleFilterChange}
-                  placeholder="e.g., Sales, Manager"
-                  className="w-full px-2 sm:px-2.5 py-1.5 border border-gray-300 rounded-md focus:ring-1 focus:ring-blue-500 text-xs" />
-              </div>
-              <div>
-                <label className="block text-2xs xs:text-xs font-medium text-gray-700 mb-1">Customer Name</label>
-                <input type="text" name="customerName" value={filters.customerName} onChange={handleFilterChange}
-                  placeholder="Search by customer"
-                  className="w-full px-2 sm:px-2.5 py-1.5 border border-gray-300 rounded-md focus:ring-1 focus:ring-blue-500 text-xs" />
-              </div>
-              <div>
-                <label className="block text-2xs xs:text-xs font-medium text-gray-700 mb-1">Customer Mobile</label>
-                <input type="text" name="customerMobileNumber" value={filters.customerMobileNumber} onChange={handleFilterChange}
-                  placeholder="Enter mobile number"
-                  className="w-full px-2 sm:px-2.5 py-1.5 border border-gray-300 rounded-md focus:ring-1 focus:ring-blue-500 text-xs" />
-              </div>
-              <div>
-                <label className="block text-2xs xs:text-xs font-medium text-gray-700 mb-1">Delivered Through</label>
+              <div><label className="block text-2xs xs:text-xs font-medium text-gray-700 mb-1">Invoice ID</label>
+                <input type="text" name="invoiceId" value={filters.invoiceId} onChange={handleFilterChange} placeholder="e.g., INV-20260113-0001"
+                  className="w-full px-2 sm:px-2.5 py-1.5 border border-gray-300 rounded-md focus:ring-1 focus:ring-blue-500 text-xs" /></div>
+              <div><label className="block text-2xs xs:text-xs font-medium text-gray-700 mb-1">Employee Name</label>
+                <input type="text" name="employeeName" value={filters.employeeName} onChange={handleFilterChange} placeholder="Search by employee"
+                  className="w-full px-2 sm:px-2.5 py-1.5 border border-gray-300 rounded-md focus:ring-1 focus:ring-blue-500 text-xs" /></div>
+              <div><label className="block text-2xs xs:text-xs font-medium text-gray-700 mb-1">Employee Category</label>
+                <input type="text" name="employeeCategory" value={filters.employeeCategory} onChange={handleFilterChange} placeholder="e.g., Sales, Manager"
+                  className="w-full px-2 sm:px-2.5 py-1.5 border border-gray-300 rounded-md focus:ring-1 focus:ring-blue-500 text-xs" /></div>
+              <div><label className="block text-2xs xs:text-xs font-medium text-gray-700 mb-1">Customer Name</label>
+                <input type="text" name="customerName" value={filters.customerName} onChange={handleFilterChange} placeholder="Search by customer"
+                  className="w-full px-2 sm:px-2.5 py-1.5 border border-gray-300 rounded-md focus:ring-1 focus:ring-blue-500 text-xs" /></div>
+              <div><label className="block text-2xs xs:text-xs font-medium text-gray-700 mb-1">Customer Mobile</label>
+                <input type="text" name="customerMobileNumber" value={filters.customerMobileNumber} onChange={handleFilterChange} placeholder="Enter mobile number"
+                  className="w-full px-2 sm:px-2.5 py-1.5 border border-gray-300 rounded-md focus:ring-1 focus:ring-blue-500 text-xs" /></div>
+              <div><label className="block text-2xs xs:text-xs font-medium text-gray-700 mb-1">Delivered Through</label>
                 <select name="deliveredThrough" value={filters.deliveredThrough} onChange={handleFilterChange}
                   className="w-full px-2 sm:px-2.5 py-1.5 border border-gray-300 rounded-md focus:ring-1 focus:ring-blue-500 text-xs">
-                  <option value="">All</option>
-                  <option value="TCS">TCS</option>
-                  <option value="M&P">M&P</option>
-                  <option value="P/O">P/O</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-2xs xs:text-xs font-medium text-gray-700 mb-1">Specific Date</label>
+                  <option value="">All</option><option value="By Hand">By Hand</option>
+                  <option value="TCS">TCS</option><option value="M&P">M&P</option><option value="P/O">P/O</option>
+                </select></div>
+              <div><label className="block text-2xs xs:text-xs font-medium text-gray-700 mb-1">Specific Date</label>
                 <input type="date" name="date" value={filters.date} onChange={handleFilterChange}
-                  className="w-full px-2 sm:px-2.5 py-1.5 border border-gray-300 rounded-md focus:ring-1 focus:ring-blue-500 text-xs" />
-              </div>
-              <div>
-                <label className="block text-2xs xs:text-xs font-medium text-gray-700 mb-1">Start Date</label>
+                  className="w-full px-2 sm:px-2.5 py-1.5 border border-gray-300 rounded-md focus:ring-1 focus:ring-blue-500 text-xs" /></div>
+              <div><label className="block text-2xs xs:text-xs font-medium text-gray-700 mb-1">Start Date</label>
                 <input type="date" name="startDate" value={filters.startDate} onChange={handleFilterChange}
-                  className="w-full px-2 sm:px-2.5 py-1.5 border border-gray-300 rounded-md focus:ring-1 focus:ring-blue-500 text-xs" />
-              </div>
-              <div>
-                <label className="block text-2xs xs:text-xs font-medium text-gray-700 mb-1">End Date</label>
+                  className="w-full px-2 sm:px-2.5 py-1.5 border border-gray-300 rounded-md focus:ring-1 focus:ring-blue-500 text-xs" /></div>
+              <div><label className="block text-2xs xs:text-xs font-medium text-gray-700 mb-1">End Date</label>
                 <input type="date" name="endDate" value={filters.endDate} onChange={handleFilterChange}
-                  className="w-full px-2 sm:px-2.5 py-1.5 border border-gray-300 rounded-md focus:ring-1 focus:ring-blue-500 text-xs" />
-              </div>
+                  className="w-full px-2 sm:px-2.5 py-1.5 border border-gray-300 rounded-md focus:ring-1 focus:ring-blue-500 text-xs" /></div>
             </div>
-
             <div className="flex flex-col xs:flex-row justify-end gap-2">
               <button onClick={clearFilters}
-                className="w-full xs:w-auto px-3 py-1.5 bg-white text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50 text-xs font-medium">
-                Clear Filters
-              </button>
+                className="w-full xs:w-auto px-3 py-1.5 bg-white text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50 text-xs font-medium">Clear Filters</button>
               <button onClick={applyFilters}
-                className="w-full xs:w-auto px-4 py-1.5 bg-gradient-to-r from-blue-600 to-cyan-600 text-white rounded-md hover:from-blue-700 hover:to-cyan-700 text-xs font-medium">
-                Search Invoices
-              </button>
+                className="w-full xs:w-auto px-4 py-1.5 bg-gradient-to-r from-blue-600 to-cyan-600 text-white rounded-md hover:from-blue-700 hover:to-cyan-700 text-xs font-medium">Search Invoices</button>
             </div>
           </div>
         </div>
 
-        {/* BULK SELECTION PANEL */}
+        {/* Bulk Selection Panel */}
         {allFilteredInvoices.length > 0 && (
           <div className="bg-white rounded-lg shadow-md overflow-hidden mb-3 sm:mb-4 border-2 border-purple-200">
             <div className="bg-gradient-to-r from-purple-600 to-pink-600 px-3 sm:px-4 py-2 sm:py-2.5 flex justify-between items-center">
@@ -937,105 +560,62 @@ const InvoiceRead = () => {
                 Bulk Selection
               </h2>
               {selectedIds.size > 0 && (
-                <span className="text-[10px] sm:text-xs bg-white text-purple-700 px-2 py-0.5 rounded-full font-bold">
-                  {selectedIds.size} selected
-                </span>
+                <span className="text-[10px] sm:text-xs bg-white text-purple-700 px-2 py-0.5 rounded-full font-bold">{selectedIds.size} selected</span>
               )}
             </div>
-
             <div className="p-2 sm:p-3 space-y-3">
               <div className="flex flex-wrap gap-2">
-                <button
-                  onClick={handleSelectAll}
-                  className={`px-3 py-1.5 rounded-md text-xs font-medium transition ${
-                    selectAll
-                      ? 'bg-purple-600 text-white hover:bg-purple-700'
-                      : 'bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200'
-                  }`}
-                >
-                  {selectAll ? '☑ Deselect All' : '☐ Select All (' + allFilteredInvoices.length + ')'}
+                <button onClick={handleSelectAll}
+                  className={`px-3 py-1.5 rounded-md text-xs font-medium transition ${selectAll
+                    ? 'bg-purple-600 text-white hover:bg-purple-700'
+                    : 'bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200'}`}>
+                  {selectAll ? '☑ Deselect All' : `☐ Select All (${allFilteredInvoices.length})`}
                 </button>
-                <button
-                  onClick={clearSelection}
-                  disabled={selectedIds.size === 0}
-                  className="px-3 py-1.5 bg-gray-50 text-gray-700 hover:bg-gray-100 border border-gray-200 rounded-md text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                >
+                <button onClick={clearSelection} disabled={selectedIds.size === 0}
+                  className="px-3 py-1.5 bg-gray-50 text-gray-700 hover:bg-gray-100 border border-gray-200 rounded-md text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed">
                   ✕ Clear Selection
                 </button>
               </div>
-
               {uniqueEmployeesInList.length > 1 && (
                 <div>
-                  <label className="block text-[10px] sm:text-xs font-medium text-gray-500 mb-1">
-                    Quick Select by Employee:
-                  </label>
+                  <label className="block text-[10px] sm:text-xs font-medium text-gray-500 mb-1">Quick Select by Employee:</label>
                   <div className="flex flex-wrap gap-1.5">
-                    {uniqueEmployeesInList.slice(0, 8).map(([empName, count]) => (
-                      <button
-                        key={empName}
-                        onClick={() => selectByEmployee(empName)}
-                        className="px-2 py-0.5 bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 rounded text-[10px] sm:text-xs"
-                        title={`Select all invoices from ${empName}`}
-                      >
-                        {empName} ({count})
+                    {uniqueEmployeesInList.slice(0, 8).map(([n, c]) => (
+                      <button key={n} onClick={() => selectByEmployee(n)} title={`Select all from ${n}`}
+                        className="px-2 py-0.5 bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 rounded text-[10px] sm:text-xs">
+                        {n} ({c})
                       </button>
                     ))}
                   </div>
                 </div>
               )}
-
               {uniqueDatesInList.length > 1 && (
                 <div>
-                  <label className="block text-[10px] sm:text-xs font-medium text-gray-500 mb-1">
-                    Quick Select by Date:
-                  </label>
+                  <label className="block text-[10px] sm:text-xs font-medium text-gray-500 mb-1">Quick Select by Date:</label>
                   <div className="flex flex-wrap gap-1.5">
-                    {uniqueDatesInList.slice(0, 8).map(([dateStr, count]) => (
-                      <button
-                        key={dateStr}
-                        onClick={() => selectByDate(dateStr)}
-                        className="px-2 py-0.5 bg-cyan-50 text-cyan-700 hover:bg-cyan-100 border border-cyan-200 rounded text-[10px] sm:text-xs"
-                        title={`Select all invoices from ${dateStr}`}
-                      >
-                        {dateStr} ({count})
+                    {uniqueDatesInList.slice(0, 8).map(([d, c]) => (
+                      <button key={d} onClick={() => selectByDate(d)} title={`Select all from ${d}`}
+                        className="px-2 py-0.5 bg-cyan-50 text-cyan-700 hover:bg-cyan-100 border border-cyan-200 rounded text-[10px] sm:text-xs">
+                        {d} ({c})
                       </button>
                     ))}
                   </div>
                 </div>
               )}
-
               {selectedIds.size > 0 && (
                 <div className="bg-purple-50 border border-purple-200 rounded-md p-2 sm:p-3 space-y-2">
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
-                    <div>
-                      <span className="text-gray-500">Selected:</span>{' '}
-                      <span className="font-bold text-purple-700">{selectedIds.size}</span>
-                    </div>
-                    <div>
-                      <span className="text-gray-500">Total Amount:</span>{' '}
-                      <span className="font-bold text-green-700">
-                        Rs. {formatCurrency(selectedStats.totalAmount)}
-                      </span>
-                    </div>
-                    <div className="col-span-2 sm:col-span-1">
-                      <span className="text-gray-500">Total Commission:</span>{' '}
-                      <span className="font-bold text-blue-700">
-                        Rs. {formatCurrency(selectedStats.totalCommission)}
-                      </span>
-                    </div>
+                    <div><span className="text-gray-500">Selected:</span>{' '}<span className="font-bold text-purple-700">{selectedIds.size}</span></div>
+                    <div><span className="text-gray-500">Total Amount:</span>{' '}<span className="font-bold text-green-700">Rs. {formatCurrency(selectedStats.totalAmount)}</span></div>
+                    <div className="col-span-2 sm:col-span-1"><span className="text-gray-500">Total Commission:</span>{' '}<span className="font-bold text-blue-700">Rs. {formatCurrency(selectedStats.totalCommission)}</span></div>
                   </div>
-
                   <div className="flex flex-col sm:flex-row gap-2 pt-1 border-t border-purple-200">
-                    <button
-                      onClick={handlePrintSelected}
-                      className="flex-1 px-3 py-2 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-md hover:from-green-700 hover:to-emerald-700 text-xs font-medium flex items-center justify-center gap-1.5"
-                    >
+                    <button onClick={handlePrintSelected}
+                      className="flex-1 px-3 py-2 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-md hover:from-green-700 hover:to-emerald-700 text-xs font-medium flex items-center justify-center gap-1.5">
                       🖨️ Print Selected Full Invoices ({selectedIds.size})
                     </button>
-                    <button
-                      onClick={handlePrintSelectedList}
-                      className="flex-1 px-3 py-2 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-md hover:from-purple-700 hover:to-pink-700 text-xs font-medium flex items-center justify-center gap-1.5"
-                    >
+                    <button onClick={handlePrintSelectedList}
+                      className="flex-1 px-3 py-2 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-md hover:from-purple-700 hover:to-pink-700 text-xs font-medium flex items-center justify-center gap-1.5">
                       📋 Print Selected Summary List
                     </button>
                   </div>
@@ -1045,37 +625,27 @@ const InvoiceRead = () => {
           </div>
         )}
 
-        {/* Invoices List */}
+        {/* Invoice List */}
         <div className="bg-white rounded-lg shadow-md overflow-hidden">
           <div className="bg-gradient-to-r from-blue-600 to-cyan-600 px-3 sm:px-4 py-2 sm:py-2.5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
             <h2 className="text-xs sm:text-sm font-semibold text-white">
               Invoice List
-              <span className="ml-2 text-[10px] bg-white/20 text-white px-1.5 py-0.5 rounded-full">
-                {invoices.length} of {allFilteredInvoices.length}
-              </span>
+              <span className="ml-2 text-[10px] bg-white/20 text-white px-1.5 py-0.5 rounded-full">{invoices.length} of {allFilteredInvoices.length}</span>
               {selectedIds.size > 0 && (
-                <span className="ml-2 text-[10px] bg-purple-500 text-white px-1.5 py-0.5 rounded-full">
-                  {selectedIds.size} selected
-                </span>
+                <span className="ml-2 text-[10px] bg-purple-500 text-white px-1.5 py-0.5 rounded-full">{selectedIds.size} selected</span>
               )}
             </h2>
             <div className="flex items-center gap-2 w-full sm:w-auto">
               <button onClick={handlePrintFilteredList}
                 className="px-2.5 py-1 bg-white text-purple-600 rounded-md hover:bg-gray-100 text-xs font-medium w-full sm:w-auto"
-                title="Print all filtered invoices">
-                🖨️ Print List
-              </button>
+                title="Print all filtered invoices">🖨️ Print List</button>
               <button onClick={() => fetchInvoices(filters)}
-                className="px-2.5 py-1 bg-white text-blue-600 rounded-md hover:bg-gray-100 text-xs font-medium w-full sm:w-auto">
-                🔄 Refresh
-              </button>
+                className="px-2.5 py-1 bg-white text-blue-600 rounded-md hover:bg-gray-100 text-xs font-medium w-full sm:w-auto">🔄 Refresh</button>
             </div>
           </div>
 
           {loading ? (
-            <div className="flex justify-center items-center py-12">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-            </div>
+            <div className="flex justify-center items-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div></div>
           ) : allFilteredInvoices.length === 0 ? (
             <div className="text-center py-12 px-4">
               <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1083,30 +653,20 @@ const InvoiceRead = () => {
               </svg>
               <h3 className="mt-3 text-sm font-medium text-gray-900">No invoices found</h3>
               <p className="mt-1 text-xs text-gray-500">
-                {Object.values(filters).some(v => v)
-                  ? 'No invoices match your filter criteria.'
-                  : 'There are no invoices to display.'}
+                {Object.values(filters).some(v => v) ? 'No invoices match your filter criteria.' : 'There are no invoices to display.'}
               </p>
             </div>
           ) : (
             <div className="overflow-x-auto">
-              {/* Mobile Card View */}
+              {/* Mobile Cards */}
               <div className="block lg:hidden">
-                {invoices.map((invoice) => (
-                  <div
-                    key={invoice._id}
-                    className={`border-b border-gray-200 p-3 transition duration-150 ${
-                      selectedIds.has(invoice._id) ? 'bg-purple-50' : 'hover:bg-gray-50'
-                    }`}
-                  >
+                {invoices.map(invoice => (
+                  <div key={invoice._id}
+                    className={`border-b border-gray-200 p-3 transition duration-150 ${selectedIds.has(invoice._id) ? 'bg-purple-50' : 'hover:bg-gray-50'}`}>
                     <div className="flex justify-between items-start mb-2 gap-2">
                       <div className="flex items-start gap-2 flex-1 min-w-0">
-                        <input
-                          type="checkbox"
-                          checked={selectedIds.has(invoice._id)}
-                          onChange={() => toggleSelect(invoice._id)}
-                          className="mt-0.5 h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded cursor-pointer flex-shrink-0"
-                        />
+                        <input type="checkbox" checked={selectedIds.has(invoice._id)} onChange={() => toggleSelect(invoice._id)}
+                          className="mt-0.5 h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded cursor-pointer flex-shrink-0" />
                         <div className="flex-1 min-w-0">
                           <div className="text-xs font-medium text-gray-900 truncate">{invoice.invoiceId}</div>
                           <div className="text-xs text-gray-500">{formatDate(invoice.createdAt)}</div>
@@ -1117,55 +677,31 @@ const InvoiceRead = () => {
                       </div>
                     </div>
                     <div className="grid grid-cols-2 gap-2 mb-2 text-xs pl-6">
-                      <div>
-                        <span className="text-gray-500">Customer: </span>
-                        <span className="font-medium">{invoice.customerName}</span>
-                      </div>
-                      <div>
-                        <span className="text-gray-500">Employee: </span>
-                        <span className="font-medium">{invoice.employeeName}</span>
-                      </div>
+                      <div><span className="text-gray-500">Customer: </span><span className="font-medium">{invoice.customerName}</span></div>
+                      <div><span className="text-gray-500">Employee: </span><span className="font-medium">{invoice.employeeName}</span></div>
                       {invoice.customerMobileNumber1 && (
-                        <div>
-                          <span className="text-gray-500">Mobile: </span>
-                          <span className="font-medium">{invoice.customerMobileNumber1}</span>
-                        </div>
+                        <div><span className="text-gray-500">Mobile: </span><span className="font-medium">{invoice.customerMobileNumber1}</span></div>
                       )}
-                      <div>
-                        <span className="text-gray-500">Items: </span>
-                        <span className="font-medium">{calculateTotalItems(invoice.products)}</span>
-                      </div>
-                      <div>
-                        <span className="text-gray-500">D/T: </span>
-                        <span className="font-medium">{invoice.deliveredThrough || 'N/A'}</span>
-                      </div>
+                      <div><span className="text-gray-500">Items: </span><span className="font-medium">{calculateTotalItems(invoice.products)}</span></div>
+                      <div><span className="text-gray-500">D/T: </span><span className="font-medium">{invoice.deliveredThrough || 'N/A'}</span></div>
                     </div>
                     <div className="flex gap-1.5">
                       <button onClick={() => handleViewInvoice(invoice)}
-                        className="flex-1 px-2 py-1 bg-blue-50 text-blue-600 rounded hover:bg-blue-100 text-xs font-medium text-center">
-                        View Details
-                      </button>
+                        className="flex-1 px-2 py-1 bg-blue-50 text-blue-600 rounded hover:bg-blue-100 text-xs font-medium text-center">View Details</button>
                       <button onClick={() => handlePrint(invoice._id)}
-                        className="px-2 py-1 bg-green-50 text-green-600 rounded hover:bg-green-100 text-xs font-medium">
-                        🖨️ Print
-                      </button>
+                        className="px-2 py-1 bg-green-50 text-green-600 rounded hover:bg-green-100 text-xs font-medium">🖨️ Print</button>
                     </div>
                   </div>
                 ))}
               </div>
 
-              {/* Desktop Table View */}
+              {/* Desktop Table */}
               <table className="min-w-full divide-y divide-gray-200 hidden lg:table">
                 <thead className="bg-gray-50">
                   <tr>
                     <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase w-10">
-                      <input
-                        type="checkbox"
-                        checked={selectAll}
-                        onChange={handleSelectAll}
-                        className="h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded cursor-pointer"
-                        title="Select / Deselect all"
-                      />
+                      <input type="checkbox" checked={selectAll} onChange={handleSelectAll}
+                        className="h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded cursor-pointer" title="Select / Deselect all" />
                     </th>
                     <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Invoice ID</th>
                     <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
@@ -1178,20 +714,12 @@ const InvoiceRead = () => {
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {invoices.map((invoice) => (
-                    <tr
-                      key={invoice._id}
-                      className={`transition duration-150 ${
-                        selectedIds.has(invoice._id) ? 'bg-purple-50' : 'hover:bg-gray-50'
-                      }`}
-                    >
+                  {invoices.map(invoice => (
+                    <tr key={invoice._id}
+                      className={`transition duration-150 ${selectedIds.has(invoice._id) ? 'bg-purple-50' : 'hover:bg-gray-50'}`}>
                       <td className="px-3 py-2 whitespace-nowrap text-center">
-                        <input
-                          type="checkbox"
-                          checked={selectedIds.has(invoice._id)}
-                          onChange={() => toggleSelect(invoice._id)}
-                          className="h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded cursor-pointer"
-                        />
+                        <input type="checkbox" checked={selectedIds.has(invoice._id)} onChange={() => toggleSelect(invoice._id)}
+                          className="h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded cursor-pointer" />
                       </td>
                       <td className="px-3 py-2 whitespace-nowrap">
                         <div className="text-xs font-medium text-gray-900">{invoice.invoiceId}</div>
@@ -1216,19 +744,13 @@ const InvoiceRead = () => {
                           {calculateTotalItems(invoice.products)} items
                         </span>
                       </td>
-                      <td className="px-3 py-2 whitespace-nowrap text-right text-xs font-bold text-green-600">
-                        Rs. {formatCurrency(invoice.grandTotalAmount)}
-                      </td>
+                      <td className="px-3 py-2 whitespace-nowrap text-right text-xs font-bold text-green-600">Rs. {formatCurrency(invoice.grandTotalAmount)}</td>
                       <td className="px-3 py-2 whitespace-nowrap text-center">
                         <div className="flex items-center justify-center gap-1">
                           <button onClick={() => handleViewInvoice(invoice)}
-                            className="inline-flex items-center px-2 py-1 bg-blue-50 text-blue-600 rounded hover:bg-blue-100 text-xs font-medium">
-                            View
-                          </button>
+                            className="inline-flex items-center px-2 py-1 bg-blue-50 text-blue-600 rounded hover:bg-blue-100 text-xs font-medium">View</button>
                           <button onClick={() => handlePrint(invoice._id)}
-                            className="inline-flex items-center px-2 py-1 bg-green-50 text-green-600 rounded hover:bg-green-100 text-xs font-medium">
-                            🖨️
-                          </button>
+                            className="inline-flex items-center px-2 py-1 bg-green-50 text-green-600 rounded hover:bg-green-100 text-xs font-medium">🖨️</button>
                         </div>
                       </td>
                     </tr>
@@ -1236,16 +758,13 @@ const InvoiceRead = () => {
                 </tbody>
               </table>
 
-              {/* ✅ Infinite Scroll Sentinel & Loaders */}
               <div ref={sentinelRef} className="h-2"></div>
-
               {loadingMore && (
                 <div className="flex justify-center items-center py-4 bg-gray-50 border-t">
                   <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600 mr-2"></div>
                   <span className="text-xs text-gray-600">Loading more...</span>
                 </div>
               )}
-
               {!hasMore && invoices.length > 0 && (
                 <div className="text-center py-4 bg-gray-50 border-t">
                   <span className="text-xs text-gray-500">✅ All {allFilteredInvoices.length} invoices loaded</span>
@@ -1255,7 +774,7 @@ const InvoiceRead = () => {
           )}
         </div>
 
-        {/* Invoice Details Modal */}
+        {/* Details Modal */}
         {selectedInvoice && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-2 sm:p-3 md:p-4">
             <div className="bg-white rounded-lg shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
@@ -1263,9 +782,7 @@ const InvoiceRead = () => {
                 <h3 className="text-xs sm:text-sm font-semibold text-white truncate mr-2">Invoice Details</h3>
                 <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
                   <button onClick={() => handlePrint(selectedInvoice._id)}
-                    className="px-2 sm:px-2.5 py-1 bg-white text-green-600 rounded-md hover:bg-gray-100 text-xs font-medium whitespace-nowrap">
-                    🖨️ Print
-                  </button>
+                    className="px-2 sm:px-2.5 py-1 bg-white text-green-600 rounded-md hover:bg-gray-100 text-xs font-medium whitespace-nowrap">🖨️ Print</button>
                   <button onClick={() => setSelectedInvoice(null)} className="text-white hover:text-gray-200">
                     <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
@@ -1273,7 +790,6 @@ const InvoiceRead = () => {
                   </button>
                 </div>
               </div>
-
               <div className="p-3 sm:p-4 space-y-3 sm:space-y-4">
                 <div className="border-b border-gray-200 pb-2 sm:pb-3">
                   <div className="flex flex-col sm:flex-row justify-between items-start gap-2">
@@ -1306,71 +822,81 @@ const InvoiceRead = () => {
                   </div>
                 </div>
 
+                {/* Note only if present */}
+                {selectedInvoice.note && (
+                  <div className="bg-yellow-50 rounded-md p-2 sm:p-3 border border-yellow-200">
+                    <h5 className="text-xs font-semibold text-yellow-900 mb-1.5">Note</h5>
+                    <p className="text-xs text-yellow-800">{selectedInvoice.note}</p>
+                  </div>
+                )}
+
                 <div>
                   <h5 className="text-xs font-semibold text-gray-900 mb-1.5 sm:mb-2">Products ({selectedInvoice.products.length})</h5>
                   <div className="overflow-x-auto">
                     <div className="block md:hidden space-y-2">
-                      {selectedInvoice.products.map((product, index) => (
-                        <div key={index} className="border border-gray-200 rounded-md p-2 bg-gray-50">
+                      {selectedInvoice.products.map((p, i) => (
+                        <div key={i} className="border border-gray-200 rounded-md p-2 bg-gray-50">
                           <div className="flex justify-between items-start mb-1">
-                            <span className="text-xs font-medium text-gray-900">{product.productName}</span>
-                            <span className="text-xs text-gray-500">#{index + 1}</span>
+                            <span className="text-xs font-medium text-gray-900">{p.productName}</span>
+                            <span className="text-xs text-gray-500">#{i + 1}</span>
                           </div>
                           <div className="grid grid-cols-2 gap-1 text-xs">
-                            <div><span className="text-gray-500">Category:</span> {product.productCategory}</div>
-                            <div><span className="text-gray-500">Qty:</span> {product.productQuantity}</div>
-                            <div><span className="text-gray-500">Unit Price:</span> Rs. {formatCurrency(product.productSalePrice)}</div>
-                            <div className="font-semibold text-green-600">Rs. {formatCurrency(product.productTotalAmount)}</div>
+                            <div><span className="text-gray-500">Category:</span> {p.productCategory}</div>
+                            <div><span className="text-gray-500">Color:</span> {p.productColor}</div>
+                            <div><span className="text-gray-500">Qty:</span> {p.productQuantity}</div>
+                            <div><span className="text-gray-500">Unit Price:</span> Rs. {formatCurrency(p.productSalePrice)}</div>
+                            <div className="font-semibold text-green-600">Rs. {formatCurrency(p.productTotalAmount)}</div>
                           </div>
                         </div>
                       ))}
                     </div>
-
                     <table className="min-w-full divide-y divide-gray-200 border border-gray-200 rounded-md hidden md:table">
                       <thead className="bg-gray-50">
                         <tr>
                           <th className="px-2.5 py-1.5 text-left text-xs font-medium text-gray-500">#</th>
                           <th className="px-2.5 py-1.5 text-left text-xs font-medium text-gray-500">Product</th>
                           <th className="px-2.5 py-1.5 text-left text-xs font-medium text-gray-500 hidden md:table-cell">Category</th>
+                          <th className="px-2.5 py-1.5 text-left text-xs font-medium text-gray-500 hidden md:table-cell">Color</th>
                           <th className="px-2.5 py-1.5 text-center text-xs font-medium text-gray-500">Qty</th>
                           <th className="px-2.5 py-1.5 text-right text-xs font-medium text-gray-500">Unit Price</th>
                           <th className="px-2.5 py-1.5 text-right text-xs font-medium text-gray-500">Total</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-200">
-                        {selectedInvoice.products.map((product, index) => (
-                          <tr key={index} className="hover:bg-gray-50">
-                            <td className="px-2.5 py-1.5 text-xs text-gray-500">{index + 1}</td>
-                            <td className="px-2.5 py-1.5 text-xs font-medium text-gray-900">{product.productName}</td>
-                            <td className="px-2.5 py-1.5 text-xs text-gray-500 hidden md:table-cell">{product.productCategory}</td>
-                            <td className="px-2.5 py-1.5 text-xs text-center text-gray-900">{product.productQuantity}</td>
-                            <td className="px-2.5 py-1.5 text-xs text-right text-gray-900">Rs. {formatCurrency(product.productSalePrice)}</td>
-                            <td className="px-2.5 py-1.5 text-xs text-right font-semibold text-green-600">Rs. {formatCurrency(product.productTotalAmount)}</td>
+                        {selectedInvoice.products.map((p, i) => (
+                          <tr key={i} className="hover:bg-gray-50">
+                            <td className="px-2.5 py-1.5 text-xs text-gray-500">{i + 1}</td>
+                            <td className="px-2.5 py-1.5 text-xs font-medium text-gray-900">{p.productName}</td>
+                            <td className="px-2.5 py-1.5 text-xs text-gray-500 hidden md:table-cell">{p.productCategory}</td>
+                            <td className="px-2.5 py-1.5 text-xs text-gray-500 hidden md:table-cell">{p.productColor}</td>
+                            <td className="px-2.5 py-1.5 text-xs text-center text-gray-900">{p.productQuantity}</td>
+                            <td className="px-2.5 py-1.5 text-xs text-right text-gray-900">Rs. {formatCurrency(p.productSalePrice)}</td>
+                            <td className="px-2.5 py-1.5 text-xs text-right font-semibold text-green-600">Rs. {formatCurrency(p.productTotalAmount)}</td>
                           </tr>
                         ))}
                       </tbody>
                       <tfoot className="bg-gray-50">
                         <tr>
-                          <td colSpan="5" className="px-2.5 py-1.5 text-xs font-medium text-gray-900 text-right">Subtotal:</td>
+                          <td colSpan="6" className="px-2.5 py-1.5 text-xs font-medium text-gray-900 text-right">Subtotal:</td>
                           <td className="px-2.5 py-1.5 text-xs font-bold text-gray-900 text-right">
-                            Rs. {formatCurrency(selectedInvoice.products.reduce((sum, p) => sum + (p.productTotalAmount || 0), 0))}
+                            Rs. {formatCurrency(selectedInvoice.products.reduce((s, p) => s + (p.productTotalAmount || 0), 0))}
                           </td>
                         </tr>
                         {selectedInvoice.deliveryCharges > 0 && (
                           <tr>
-                            <td colSpan="5" className="px-2.5 py-1.5 text-xs font-medium text-gray-900 text-right">Delivery:</td>
+                            <td colSpan="6" className="px-2.5 py-1.5 text-xs font-medium text-gray-900 text-right">Delivery:</td>
                             <td className="px-2.5 py-1.5 text-xs text-right">Rs. {formatCurrency(selectedInvoice.deliveryCharges)}</td>
                           </tr>
                         )}
                         <tr className="border-t-2 border-blue-200">
-                          <td colSpan="5" className="px-2.5 py-1.5 text-xs font-bold text-gray-900 text-right bg-gradient-to-r from-blue-50 to-cyan-50">Grand Total:</td>
+                          <td colSpan="6" className="px-2.5 py-1.5 text-xs font-bold text-gray-900 text-right bg-gradient-to-r from-blue-50 to-cyan-50">Grand Total:</td>
                           <td className="px-2.5 py-1.5 text-sm font-bold text-green-600 text-right bg-gradient-to-r from-blue-50 to-cyan-50">
                             Rs. {formatCurrency(selectedInvoice.grandTotalAmount)}
                           </td>
                         </tr>
                         {selectedInvoice.employeeCommission && selectedInvoice.employeeCommission.length > 0 && (
                           <tr>
-                            <td colSpan="5" className="px-2.5 py-1.5 text-xs font-medium text-green-700 text-right">Commission:</td>
+                            <td colSpan="6" className="px-2.5 py-1.5 text-xs font-medium text-green-700 text-right">Commission:</td>
                             <td className="px-2.5 py-1.5 text-xs font-bold text-green-700 text-right">
                               Rs. {formatCurrency(calculateEmployeeCommission(selectedInvoice.products, selectedInvoice.employeeCommission))}
                             </td>
@@ -1378,11 +904,10 @@ const InvoiceRead = () => {
                         )}
                       </tfoot>
                     </table>
-
                     <div className="block md:hidden mt-3 space-y-2 text-xs">
                       <div className="flex justify-between">
                         <span className="font-medium">Subtotal:</span>
-                        <span className="font-bold">Rs. {formatCurrency(selectedInvoice.products.reduce((sum, p) => sum + (p.productTotalAmount || 0), 0))}</span>
+                        <span className="font-bold">Rs. {formatCurrency(selectedInvoice.products.reduce((s, p) => s + (p.productTotalAmount || 0), 0))}</span>
                       </div>
                       {selectedInvoice.deliveryCharges > 0 && (
                         <div className="flex justify-between">
@@ -1411,22 +936,13 @@ const InvoiceRead = () => {
         )}
       </div>
 
-      {/* Custom CSS for extra small screens */}
       <style jsx='true'>{`
         @media (min-width: 480px) {
-          .xs\\:grid-cols-2 {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-          }
-          .xs\\:flex-row {
-            flex-direction: row;
-          }
-          .xs\\:w-auto {
-            width: auto;
-          }
+          .xs\\:grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+          .xs\\:flex-row { flex-direction: row; }
+          .xs\\:w-auto { width: auto; }
         }
-        .text-2xs {
-          font-size: 0.65rem;
-        }
+        .text-2xs { font-size: 0.65rem; }
       `}</style>
     </div>
   );
