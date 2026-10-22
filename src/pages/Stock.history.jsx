@@ -1,12 +1,69 @@
-// StockHistory.jsx - View all stock operations with date/time tracking
-import React, { useState, useEffect, useCallback } from 'react';
+// StockHistory.jsx - View all stock operations with Infinite Scroll + PKT support
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 
 const API_BASE_URL = 'https://bisni-ms-backend.onrender.com/api';
 
+// ✅ Pakistan Standard Time (UTC+5) - Full date & time
+const formatPakistanTime = (dateString) => {
+  if (!dateString) return 'N/A';
+  return new Date(dateString).toLocaleString('en-PK', {
+    timeZone: 'Asia/Karachi',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true
+  });
+};
+
+// ✅ Pakistan Standard Time (UTC+5) - Date only
+const formatPakistanDateOnly = (dateString) => {
+  if (!dateString) return 'N/A';
+  return new Date(dateString).toLocaleDateString('en-PK', {
+    timeZone: 'Asia/Karachi',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric'
+  });
+};
+
+// ✅ Pakistan Standard Time (UTC+5) - Time only
+const formatPakistanTimeOnly = (dateString) => {
+  if (!dateString) return 'N/A';
+  return new Date(dateString).toLocaleTimeString('en-PK', {
+    timeZone: 'Asia/Karachi',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true
+  });
+};
+
+// ✅ Convert PKT date input (YYYY-MM-DD) to UTC ISO string
+const convertPktDateToUtc = (dateString, isEndDate = false) => {
+  if (!dateString) return '';
+  const [year, month, day] = dateString.split('-').map(Number);
+
+  if (isEndDate) {
+    const utcDate = new Date(Date.UTC(year, month - 1, day, 18, 59, 59, 999));
+    return utcDate.toISOString();
+  } else {
+    const utcDate = new Date(Date.UTC(year, month - 1, day - 1, 19, 0, 0, 0));
+    return utcDate.toISOString();
+  }
+};
+
+const PAGE_SIZE = 10; // ✅ Load 10 records at a time
+
 const StockHistory = () => {
-  const [history, setHistory] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [history, setHistory] = useState([]);                     // All fetched records from backend
+  const [visibleHistory, setVisibleHistory] = useState([]);       // Currently visible (loaded) records
+  const [loading, setLoading] = useState(true);                   // Initial load
+  const [loadingMore, setLoadingMore] = useState(false);          // Loading next batch
+  const [hasMore, setHasMore] = useState(true);                   // More to load?
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
   const [selectedEntry, setSelectedEntry] = useState(null);
@@ -16,14 +73,6 @@ const StockHistory = () => {
     productColors: []
   });
 
-  // Pagination
-  const [pagination, setPagination] = useState({
-    currentPage: 1,
-    totalPages: 1,
-    totalRecords: 0,
-    limit: 20
-  });
-
   // Statistics
   const [stats, setStats] = useState({
     total: 0,
@@ -31,6 +80,9 @@ const StockHistory = () => {
     updates: 0,
     deletes: 0
   });
+
+  // Total records from backend (for display)
+  const [totalRecords, setTotalRecords] = useState(0);
 
   // Filters
   const [filters, setFilters] = useState({
@@ -45,9 +97,13 @@ const StockHistory = () => {
 
   const [dateFilterType, setDateFilterType] = useState('all');
 
+  // ✅ Infinite scroll refs
+  const sentinelRef = useRef(null);
+  const pageRef = useRef(0);
+
   useEffect(() => {
     fetchFilterOptions();
-    fetchHistory();
+    fetchHistory(1, filters);
   }, []);
 
   const fetchFilterOptions = async () => {
@@ -59,35 +115,92 @@ const StockHistory = () => {
     }
   };
 
+  // ✅ Fetch history — backend returns paginated data.
+  // Hum backend se bara page size maang rahe hain (e.g., 1000) taake sara data ek baar aa jaye,
+  // phir frontend par 10-10 karke scroll par reveal karenge.
   const fetchHistory = useCallback(async (page = 1, filterParams = filters) => {
     try {
       setLoading(true);
       setError(null);
+      pageRef.current = 0;
 
       const params = new URLSearchParams();
-      params.append('page', page);
-      params.append('limit', pagination.limit);
+      params.append('page', 1);
+      params.append('limit', 1000); // ✅ Fetch all in one go (backend already supports limit)
 
       if (filterParams.actionType) params.append('actionType', filterParams.actionType);
       if (filterParams.productName) params.append('productName', filterParams.productName);
       if (filterParams.productCategory) params.append('productCategory', filterParams.productCategory);
       if (filterParams.productColor) params.append('productColor', filterParams.productColor);
-      if (filterParams.date) params.append('date', filterParams.date);
-      if (filterParams.startDate) params.append('startDate', filterParams.startDate);
-      if (filterParams.endDate) params.append('endDate', filterParams.endDate);
+
+      // ✅ Convert single date from PKT to UTC range
+      if (filterParams.date) {
+        const dateFromUtc = convertPktDateToUtc(filterParams.date, false);
+        const dateToUtc = convertPktDateToUtc(filterParams.date, true);
+        params.append('startDate', dateFromUtc);
+        params.append('endDate', dateToUtc);
+      } else {
+        if (filterParams.startDate) {
+          params.append('startDate', convertPktDateToUtc(filterParams.startDate, false));
+        }
+        if (filterParams.endDate) {
+          params.append('endDate', convertPktDateToUtc(filterParams.endDate, true));
+        }
+      }
 
       const response = await axios.get(`${API_BASE_URL}/stock-history?${params.toString()}`);
 
-      setHistory(response.data.data || []);
+      const allRecords = response.data.data || [];
+      setHistory(allRecords);
+      setTotalRecords(response.data.pagination?.totalRecords || allRecords.length);
       setStats(response.data.statistics || { total: 0, creates: 0, updates: 0, deletes: 0 });
-      setPagination(response.data.pagination || { currentPage: 1, totalPages: 1, totalRecords: 0, limit: 20 });
+
+      // ✅ Show only first 10
+      const firstBatch = allRecords.slice(0, PAGE_SIZE);
+      setVisibleHistory(firstBatch);
+      setHasMore(allRecords.length > PAGE_SIZE);
     } catch (error) {
       console.error('Error fetching history:', error);
       setError(error.response?.data?.message || 'Failed to load stock history.');
     } finally {
       setLoading(false);
     }
-  }, [filters, pagination.limit]);
+  }, [filters]);
+
+  // ✅ Load more records (used by infinite scroll)
+  const loadMore = useCallback(() => {
+    if (loadingMore || !hasMore) return;
+
+    setLoadingMore(true);
+    const nextPage = pageRef.current + 1;
+    const startIdx = nextPage * PAGE_SIZE;
+    const endIdx = startIdx + PAGE_SIZE;
+
+    setTimeout(() => {
+      const nextBatch = history.slice(startIdx, endIdx);
+      setVisibleHistory(prev => [...prev, ...nextBatch]);
+      pageRef.current = nextPage;
+      setHasMore(endIdx < history.length);
+      setLoadingMore(false);
+    }, 250);
+  }, [loadingMore, hasMore, history]);
+
+  // ✅ IntersectionObserver for infinite scroll
+  useEffect(() => {
+    if (!sentinelRef.current) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasMore && !loadingMore && !loading) {
+          loadMore();
+        }
+      },
+      { rootMargin: '200px' }
+    );
+
+    observer.observe(sentinelRef.current);
+    return () => observer.disconnect();
+  }, [loadMore, hasMore, loadingMore, loading]);
 
   const handleFilterChange = (e) => {
     const { name, value } = e.target;
@@ -119,35 +232,9 @@ const StockHistory = () => {
   };
 
   // Formatting helpers
-  const formatDate = (dateString) => {
-    if (!dateString) return 'N/A';
-    return new Date(dateString).toLocaleString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit'
-    });
-  };
-
-  const formatDateOnly = (dateString) => {
-    if (!dateString) return 'N/A';
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric'
-    });
-  };
-
-  const formatTimeOnly = (dateString) => {
-    if (!dateString) return 'N/A';
-    return new Date(dateString).toLocaleTimeString('en-US', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit'
-    });
-  };
+  const formatDate = (dateString) => formatPakistanTime(dateString);
+  const formatDateOnly = (dateString) => formatPakistanDateOnly(dateString);
+  const formatTimeOnly = (dateString) => formatPakistanTimeOnly(dateString);
 
   const formatCurrency = (amount) => {
     return new Intl.NumberFormat('en-US', {
@@ -159,33 +246,13 @@ const StockHistory = () => {
   const getActionBadge = (actionType) => {
     switch (actionType) {
       case 'CREATE':
-        return {
-          bg: 'bg-green-100',
-          text: 'text-green-800',
-          icon: '➕',
-          label: 'Added'
-        };
+        return { bg: 'bg-green-100', text: 'text-green-800', icon: '➕', label: 'Added' };
       case 'UPDATE':
-        return {
-          bg: 'bg-blue-100',
-          text: 'text-blue-800',
-          icon: '✏️',
-          label: 'Updated'
-        };
+        return { bg: 'bg-blue-100', text: 'text-blue-800', icon: '✏️', label: 'Updated' };
       case 'DELETE':
-        return {
-          bg: 'bg-red-100',
-          text: 'text-red-800',
-          icon: '🗑️',
-          label: 'Deleted'
-        };
+        return { bg: 'bg-red-100', text: 'text-red-800', icon: '🗑️', label: 'Deleted' };
       default:
-        return {
-          bg: 'bg-gray-100',
-          text: 'text-gray-800',
-          icon: '📝',
-          label: actionType
-        };
+        return { bg: 'bg-gray-100', text: 'text-gray-800', icon: '📝', label: actionType };
     }
   };
 
@@ -427,10 +494,13 @@ const StockHistory = () => {
         <div className="bg-white rounded-lg shadow-md overflow-hidden">
           <div className="bg-linear-to-r from-purple-600 to-indigo-600 px-3 sm:px-4 py-2 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
             <h2 className="text-xs sm:text-sm font-semibold text-white">
-              History Records ({pagination.totalRecords})
+              History Records
+              <span className="ml-2 text-[10px] bg-white/20 text-white px-1.5 py-0.5 rounded-full">
+                {visibleHistory.length} of {history.length}
+              </span>
             </h2>
             <button
-              onClick={() => fetchHistory(pagination.currentPage)}
+              onClick={() => fetchHistory(1, filters)}
               className="w-full sm:w-auto px-2.5 py-1 bg-white text-purple-600 rounded-md hover:bg-gray-100 text-xs font-medium"
             >
               🔄 Refresh
@@ -451,7 +521,7 @@ const StockHistory = () => {
             <>
               {/* Mobile Card View */}
               <div className="block lg:hidden">
-                {history.map((entry) => {
+                {visibleHistory.map((entry) => {
                   const badge = getActionBadge(entry.actionType);
                   const qtyChange = getQuantityChange(entry);
 
@@ -519,7 +589,7 @@ const StockHistory = () => {
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
-                    {history.map((entry) => {
+                    {visibleHistory.map((entry) => {
                       const badge = getActionBadge(entry.actionType);
                       const qtyChange = getQuantityChange(entry);
 
@@ -567,53 +637,19 @@ const StockHistory = () => {
                 </table>
               </div>
 
-              {/* Pagination */}
-              {pagination.totalPages > 1 && (
-                <div className="bg-gray-50 px-3 py-2 flex flex-col sm:flex-row items-center justify-between gap-2 border-t text-xs">
-                  <span>
-                    Showing {((pagination.currentPage - 1) * pagination.limit) + 1} - {Math.min(pagination.currentPage * pagination.limit, pagination.totalRecords)} of {pagination.totalRecords}
-                  </span>
-                  <div className="flex flex-wrap gap-1 justify-center">
-                    <button
-                      onClick={() => fetchHistory(pagination.currentPage - 1)}
-                      disabled={pagination.currentPage === 1}
-                      className="px-2 py-1 border rounded disabled:opacity-50 hover:bg-gray-100"
-                    >
-                      ← Prev
-                    </button>
-                    {[...Array(Math.min(5, pagination.totalPages))].map((_, i) => {
-                      let pageNum;
-                      if (pagination.totalPages <= 5) {
-                        pageNum = i + 1;
-                      } else if (pagination.currentPage <= 3) {
-                        pageNum = i + 1;
-                      } else if (pagination.currentPage >= pagination.totalPages - 2) {
-                        pageNum = pagination.totalPages - 4 + i;
-                      } else {
-                        pageNum = pagination.currentPage - 2 + i;
-                      }
-                      return (
-                        <button
-                          key={pageNum}
-                          onClick={() => fetchHistory(pageNum)}
-                          className={`px-2 py-1 border rounded ${
-                            pagination.currentPage === pageNum
-                              ? 'bg-purple-600 text-white'
-                              : 'hover:bg-gray-100'
-                          }`}
-                        >
-                          {pageNum}
-                        </button>
-                      );
-                    })}
-                    <button
-                      onClick={() => fetchHistory(pagination.currentPage + 1)}
-                      disabled={pagination.currentPage === pagination.totalPages}
-                      className="px-2 py-1 border rounded disabled:opacity-50 hover:bg-gray-100"
-                    >
-                      Next →
-                    </button>
-                  </div>
+              {/* ✅ Infinite Scroll Sentinel & Loaders */}
+              <div ref={sentinelRef} className="h-2"></div>
+
+              {loadingMore && (
+                <div className="flex justify-center items-center py-4 bg-gray-50 border-t">
+                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-purple-600 mr-2"></div>
+                  <span className="text-xs text-gray-600">Loading more...</span>
+                </div>
+              )}
+
+              {!hasMore && visibleHistory.length > 0 && (
+                <div className="text-center py-4 bg-gray-50 border-t">
+                  <span className="text-xs text-gray-500">✅ All {history.length} records loaded</span>
                 </div>
               )}
             </>
