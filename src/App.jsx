@@ -8,15 +8,17 @@ import EmployeeUpdate from './pages/Employee.update';
 import InvoiceCreate from './pages/Invoice.create';
 import InvoiceRead from './pages/Invoice.read';
 import InvoiceUpdate from './pages/Invoice.Update';
+import RecoveryDeleteInvoices from './pages/Invoice.recoveryDelete';
 import InvoiceDelete from './pages/Invoice.delete';
 import StockCreate from './pages/Stock.create';
 import StockRead from './pages/Stock.read';
 import StockDelete from './pages/Stock.delete';
 import StockUpdate from './pages/Stock.update';
-import StockHistory from './pages/Stock.history';  // NEW IMPORT
+import StockHistory from './pages/Stock.history'; 
 import Session from './pages/Session';
 import Stats from './pages/Stats';
 import SalesHistory from './pages/Sales.History'
+import CategoryProductSales from './pages/CategoryProductSales';
 
 const App = () => {
   return (
@@ -35,14 +37,16 @@ const App = () => {
             <Route path="/read_invoice" element={<InvoiceRead />} />
             <Route path="/update_invoice" element={<InvoiceUpdate />} />
             <Route path="/delete_invoice" element={<InvoiceDelete />} />
+            <Route path="/recoveryDelete_invoice" element={<RecoveryDeleteInvoices />} />
             <Route path="/create_stock" element={<StockCreate />} />
             <Route path="/read_stock" element={<StockRead />} />
             <Route path="/delete_stock" element={<StockDelete />} />
             <Route path="/update_stock" element={<StockUpdate />} />
-            <Route path="/stock_history" element={<StockHistory />} />  {/* NEW ROUTE */}
+            <Route path="/stock_history" element={<StockHistory />} /> 
             <Route path="/stats" element={<Stats />} />
             <Route path="/session" element={<Session />} />
             <Route path="/sales_history" element={<SalesHistory />} />
+            <Route path="/category_product_sales" element={<CategoryProductSales />} />
           </Routes>
         </div>
       </div>
